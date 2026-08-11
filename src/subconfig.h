@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string>
 #include "arduinoFFT.h"
+#include "FFTCompat.h"   /* v1→v2 arduinoFFT API shim */
 #include "shared.h"
 #include "utils.h"
 

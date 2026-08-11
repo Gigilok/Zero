@@ -398,6 +398,20 @@ void TFT_eSPI::drawChar(int16_t x, int16_t y, unsigned char c,
     flush();
 }
 
+// 4-arg overload: draws a single char using current text color/size and
+// returns the character's advance width in original 240x320 coordinate space
+// (so the caller can do `xPos += tft.drawChar(c, xPos, y, 2);`).
+int16_t TFT_eSPI::drawChar(unsigned char c, int16_t x, int16_t y, uint8_t size) {
+    if (!_oled) return 0;
+    // Use current text colors as foreground/background
+    _oled->drawChar(sx(x), sy(y), c,
+                    colorToInk(_fgColor), colorToBg(_bgColor),
+                    scaledTextSize());
+    flush();
+    // Adafruit_GFX default font is 5x7 at size 1; advance width is 6px per char.
+    return 6 * (size > 0 ? size : 1);
+}
+
 void TFT_eSPI::drawString(const char *str, int16_t x, int16_t y) {
     int16_t saveX = _cursorX, saveY = _cursorY;
     setCursor(x, y);

@@ -49,12 +49,18 @@
 #define TFT_LIGHTGREY   0xC618
 #define TFT_DARKGREY    0x7BEF
 #define TFT_BLUE        0x001F
+#ifdef TFT_GREEN
+#undef TFT_GREEN
+#endif
 #define TFT_GREEN       0x07E0
 #define TFT_CYAN        0x07FF
 #define TFT_RED         0xF800
 #define TFT_MAGENTA     0xF81F
 #define TFT_YELLOW      0xFFE0
 #define TFT_ORANGE      0xFD20
+#ifdef TFT_GREENYELLOW
+#undef TFT_GREENYELLOW
+#endif
 #define TFT_GREENYELLOW 0xAFE5
 #define TFT_PINK        0xF81F
 #define TFT_BROWN       0xBC40
@@ -64,17 +70,26 @@
 #define TFT_SALMON      0xFC00
 #define TFT_WHITE       0xFFFF
 
-// Backwards-compat aliases used in some source files
+// Backwards-compat aliases used in some source files. Use #undef guards
+// because shared.h / utils.h may already have defined these (with different
+// values for the OLED theme — e.g. TFT_GREEN is mapped to GREEN = 0xB721).
+#ifdef TFT_DARKBLUE
+#undef TFT_DARKBLUE
+#endif
 #define TFT_DARKBLUE    0x3166
+#ifdef TFT_LIGHTBLUE
+#undef TFT_LIGHTBLUE
+#endif
 #define TFT_LIGHTBLUE   0x051F
+#ifdef TFTWHITE
+#undef TFTWHITE
+#endif
 #define TFTWHITE        0xFFFF
+#ifdef TFT_GRAY
+#undef TFT_GRAY
+#endif
 #define TFT_GRAY        0x8410
 #define TFT_GREEN_YELLOW 0xAFE5
-
-#ifdef TFT_GREEN
-#undef TFT_GREEN
-#endif
-#define TFT_GREEN 0x07E0
 
 // Datum constants used by setTextDatum (subset of TFT_eSPI's enum)
 #define TL_DATUM  0

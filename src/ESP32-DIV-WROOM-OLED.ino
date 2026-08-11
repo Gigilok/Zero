@@ -847,13 +847,102 @@ const int Y_SPACING = 75;
 void displayOtherMenuGrid();
 void displayPagedSubmenu();
 
-// Last submenu item ("Back to Main Menu") is pinned to the bottom of the screen.
-static int submenuItemY(int index) {
-    if (active_submenu_size > 0 && index == active_submenu_size - 1) {
-        return tft.height() - 30;
+// =============================================================================
+// BOARD_ESP32_WROOM_OLED submenu layout
+// =============================================================================
+// The original 240x320 layout uses 30 source-px per submenu row. Mapped to the
+// 128x64 OLED that's only 6 OLED px per row — far too tight for the 8 px tall
+// font at size=1, causing heavy overlap ("embaralhado").
+//
+// OLED-aware layout:
+//   * 60 source-px per row = 12 OLED px per row (8 px font + 4 px gap)
+//   * Top margin 30 source-px = 6 OLED px (below status bar)
+//   * 4 selectable rows visible at once (48 OLED px)
+//   * "Back" item pinned to bottom row (y = TFT_HEIGHT - 30)
+//   * When selectable items exceed 4, a vertical scrollbar is drawn on the
+//     right edge (3 px wide) and the window scrolls to keep the highlighted
+//     item visible.
+// =============================================================================
+#if defined(BOARD_ESP32_WROOM_OLED)
+    constexpr int OLED_SUB_ROW_H     = 60;   // source-px per row (= 12 OLED px)
+    constexpr int OLED_SUB_TOP_Y     = 30;   // first row y in source px
+    constexpr int OLED_SUB_VISIBLE   = 4;    // selectable rows visible at once
+    constexpr int OLED_SUB_BACK_Y    = TFT_HEIGHT - 30;  // bottom-pinned "Back"
+    // Scrollbar geometry (source space). On OLED, 3 source-px ≈ 1 OLED px —
+    // too thin to see. Use 6 source-px width (= 3 OLED px) and a 12 source-px
+    // (= 3 OLED px) minimum indicator height so the bar is clearly visible.
+    constexpr int OLED_SUB_SCROLLBAR_X = TFT_WIDTH - 9;  // 9 source-px from right edge
+    constexpr int OLED_SUB_SCROLLBAR_W = 6;              // 6 source-px wide (= 3 OLED px)
+    constexpr int OLED_SUB_SCROLLBAR_MIN_H = 12;         // 12 source-px min indicator (= 3 OLED px)
+    static int g_subScrollOffset = 0;  // index of first visible selectable item
+    static int g_subPrevScrollOffset = -1;  // for change detection
+
+    // Returns Y (source space) for item `index`, or -1 if scrolled off-screen.
+    // The last item ("Back") is always pinned to the bottom row.
+    static int submenuItemY(int index) {
+        const int last = active_submenu_size - 1;
+        if (active_submenu_size > 0 && index == last) {
+            return OLED_SUB_BACK_Y;
+        }
+        const int visibleIdx = index - g_subScrollOffset;
+        if (visibleIdx < 0 || visibleIdx >= OLED_SUB_VISIBLE) {
+            return -1;  // off-screen
+        }
+        return OLED_SUB_TOP_Y + visibleIdx * OLED_SUB_ROW_H;
     }
-    return 30 + index * 30;
-}
+
+    // Keep current_submenu_index within the visible window. The "Back" item
+    // (last index) is always visible and never triggers scrolling.
+    static void submenuEnsureVisible() {
+        const int last = active_submenu_size - 1;
+        if (current_submenu_index == last) return;
+        if (current_submenu_index < g_subScrollOffset) {
+            g_subScrollOffset = current_submenu_index;
+        } else if (current_submenu_index >= g_subScrollOffset + OLED_SUB_VISIBLE) {
+            g_subScrollOffset = current_submenu_index - OLED_SUB_VISIBLE + 1;
+        }
+        if (g_subScrollOffset < 0) g_subScrollOffset = 0;
+    }
+
+    // Draws a vertical scrollbar on the right edge if the submenu has more
+    // selectable items than fit on screen. Indicator position reflects
+    // g_subScrollOffset within the total selectable count.
+    static void drawSubmenuScrollbar() {
+        const int selectableCount = active_submenu_size > 0
+            ? active_submenu_size - 1 : 0;
+        if (selectableCount <= OLED_SUB_VISIBLE) return;
+
+        // Scrollbar geometry in SOURCE space (so it scales to OLED via sx/sy).
+        const int trackTop    = OLED_SUB_TOP_Y;
+        const int trackBottom = OLED_SUB_BACK_Y - 4;
+        const int trackH      = trackBottom - trackTop;
+        const int indicatorH  = (OLED_SUB_VISIBLE * trackH) / selectableCount;
+        const int clampedIndH = indicatorH < OLED_SUB_SCROLLBAR_MIN_H
+                                ? OLED_SUB_SCROLLBAR_MIN_H : indicatorH;
+        const int maxScroll   = selectableCount - OLED_SUB_VISIBLE;
+        const int indicatorY  = trackTop + (maxScroll > 0
+            ? (g_subScrollOffset * (trackH - clampedIndH)) / maxScroll
+            : 0);
+
+        // Draw track (faint) + indicator (accent).
+        tft.fillRect(OLED_SUB_SCROLLBAR_X, trackTop,
+                     OLED_SUB_SCROLLBAR_W, trackH, UI_LINE);
+        tft.fillRect(OLED_SUB_SCROLLBAR_X, indicatorY,
+                     OLED_SUB_SCROLLBAR_W, clampedIndH, UI_ICON);
+    }
+#else
+    // Original 240x320 layout: 30 source-px per row, "Back" pinned to bottom.
+    static int g_subScrollOffset = 0;
+    static int g_subPrevScrollOffset = -1;
+    static int submenuItemY(int index) {
+        if (active_submenu_size > 0 && index == active_submenu_size - 1) {
+            return tft.height() - 30;
+        }
+        return 30 + index * 30;
+    }
+    static void submenuEnsureVisible() { /* no scroll window on TFT */ }
+    static void drawSubmenuScrollbar() { /* no scrollbar on TFT */ }
+#endif
 
 void displaySubmenu() {
     setTouchButtonInputEnabled(false);
@@ -874,11 +963,24 @@ void displaySubmenu() {
     tft.setTextFont(2);
     tft.setTextSize(1);
 
+    // Keep the highlighted item within the visible scroll window. On non-OLED
+    // boards this is a no-op (full list always visible).
+    submenuEnsureVisible();
+
+    // Detect scroll-window changes (OLED only). If the user navigated past the
+    // visible window, force a full redraw of the menu area.
+    const bool scrollChanged = (g_subScrollOffset != g_subPrevScrollOffset);
+    if (scrollChanged) {
+        submenu_initialized = false;
+        g_subPrevScrollOffset = g_subScrollOffset;
+    }
+
     if (!submenu_initialized) {
         tft.fillScreen(UI_BG);
 
         for (int i = 0; i < active_submenu_size; i++) {
             const int yPos = submenuItemY(i);
+            if (yPos < 0) continue;  // off-screen (OLED scroll window)
             const bool isBack = (i == active_submenu_size - 1);
 
             tft.setTextColor(UI_TEXT, UI_BG);
@@ -890,36 +992,58 @@ void displaySubmenu() {
             tft.print(active_submenu_items[i]);
         }
 
-        submenu_initialized = true;
-        last_submenu_index = -1;
-    }
+        // Highlight the currently selected item.
+        {
+            const int new_yPos = submenuItemY(current_submenu_index);
+            const bool newBack = (current_submenu_index == active_submenu_size - 1);
+            if (new_yPos >= 0) {
+                tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+                tft.setTextColor(UI_ICON, UI_BG);
+                tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
+                tft.setCursor(30, new_yPos);
+                if (!newBack) {
+                    tft.print("| ");
+                }
+                tft.print(active_submenu_items[current_submenu_index]);
+            }
+        }
 
-    if (last_submenu_index != current_submenu_index) {
+        // Visual scrollbar on right edge (no-op on TFT, drawn only when the
+        // submenu has more selectable items than fit on screen).
+        drawSubmenuScrollbar();
+
+        submenu_initialized = true;
+        last_submenu_index = current_submenu_index;
+    } else if (last_submenu_index != current_submenu_index) {
+        // Redraw only the previously-selected and newly-selected rows.
         if (last_submenu_index >= 0) {
             const int prev_yPos = submenuItemY(last_submenu_index);
             const bool prevBack = (last_submenu_index == active_submenu_size - 1);
-
-            tft.fillRect(0, prev_yPos, tft.width(), 28, UI_BG);
-            tft.setTextColor(UI_TEXT, UI_BG);
-            tft.drawBitmap(10, prev_yPos, active_submenu_icons[last_submenu_index], 16, 16, UI_TEXT);
-            tft.setCursor(30, prev_yPos);
-            if (!prevBack) {
-                tft.print("| ");
+            if (prev_yPos >= 0) {
+                tft.fillRect(0, prev_yPos, tft.width(), 28, UI_BG);
+                tft.setTextColor(UI_TEXT, UI_BG);
+                tft.drawBitmap(10, prev_yPos, active_submenu_icons[last_submenu_index], 16, 16, UI_TEXT);
+                tft.setCursor(30, prev_yPos);
+                if (!prevBack) {
+                    tft.print("| ");
+                }
+                tft.print(active_submenu_items[last_submenu_index]);
             }
-            tft.print(active_submenu_items[last_submenu_index]);
         }
 
         const int new_yPos = submenuItemY(current_submenu_index);
         const bool newBack = (current_submenu_index == active_submenu_size - 1);
 
-        tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
-        tft.setTextColor(UI_ICON, UI_BG);
-        tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
-        tft.setCursor(30, new_yPos);
-        if (!newBack) {
-            tft.print("| ");
+        if (new_yPos >= 0) {
+            tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+            tft.setTextColor(UI_ICON, UI_BG);
+            tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
+            tft.setCursor(30, new_yPos);
+            if (!newBack) {
+                tft.print("| ");
+            }
+            tft.print(active_submenu_items[current_submenu_index]);
         }
-        tft.print(active_submenu_items[current_submenu_index]);
 
         last_submenu_index = current_submenu_index;
     }
@@ -935,16 +1059,82 @@ void displayPagedSubmenu() {
     tft.setTextFont(2);
     tft.setTextSize(1);
 
+    // OLED-aware scroll window for the paged submenu (WiFi / Bluetooth).
+    // Same layout constants as the regular submenu: 60 source-px per row, 4
+    // visible rows, footer pinned to bottom. On TFT boards this is a no-op.
+#if defined(BOARD_ESP32_WROOM_OLED)
+    auto pagedSubmenuItemY = [](int index) -> int {
+        const int visibleIdx = index - g_subScrollOffset;
+        if (visibleIdx < 0 || visibleIdx >= OLED_SUB_VISIBLE) return -1;
+        return OLED_SUB_TOP_Y + visibleIdx * OLED_SUB_ROW_H;
+    };
+    auto pagedSubmenuEnsureVisible = [&]() {
+        if (current_submenu_index < 0 || current_submenu_index >= featureCount) {
+            // Footer button selected — don't scroll.
+            return;
+        }
+        if (current_submenu_index < g_subScrollOffset) {
+            g_subScrollOffset = current_submenu_index;
+        } else if (current_submenu_index >= g_subScrollOffset + OLED_SUB_VISIBLE) {
+            g_subScrollOffset = current_submenu_index - OLED_SUB_VISIBLE + 1;
+        }
+        if (g_subScrollOffset < 0) g_subScrollOffset = 0;
+    };
+    auto drawPagedSubmenuScrollbar = [&]() {
+        if (featureCount <= OLED_SUB_VISIBLE) return;
+        const int trackTop    = OLED_SUB_TOP_Y;
+        const int trackBottom = OLED_SUB_BACK_Y - 4;
+        const int trackH      = trackBottom - trackTop;
+        const int indicatorH  = (OLED_SUB_VISIBLE * trackH) / featureCount;
+        const int clampedIndH = indicatorH < OLED_SUB_SCROLLBAR_MIN_H
+                                ? OLED_SUB_SCROLLBAR_MIN_H : indicatorH;
+        const int maxScroll   = featureCount - OLED_SUB_VISIBLE;
+        const int indicatorY  = trackTop + (maxScroll > 0
+            ? (g_subScrollOffset * (trackH - clampedIndH)) / maxScroll
+            : 0);
+        tft.fillRect(OLED_SUB_SCROLLBAR_X, trackTop,
+                     OLED_SUB_SCROLLBAR_W, trackH, UI_LINE);
+        tft.fillRect(OLED_SUB_SCROLLBAR_X, indicatorY,
+                     OLED_SUB_SCROLLBAR_W, clampedIndH, UI_ICON);
+    };
+    pagedSubmenuEnsureVisible();
+    const bool scrollChanged = (g_subScrollOffset != g_subPrevScrollOffset);
+    if (scrollChanged) {
+        submenu_initialized = false;
+        g_subPrevScrollOffset = g_subScrollOffset;
+    }
+#else
+    auto pagedSubmenuItemY = [](int index) -> int {
+        return 30 + index * 30;
+    };
+#endif
+
     if (!submenu_initialized) {
         tft.fillScreen(UI_BG);
         for (int i = 0; i < featureCount; i++) {
-            const int yPos = 30 + i * 30;
+            const int yPos = pagedSubmenuItemY(i);
+            if (yPos < 0) continue;  // off-screen (OLED scroll window)
             tft.setTextColor(UI_TEXT, UI_BG);
             tft.drawBitmap(10, yPos, active_submenu_icons[i], 16, 16, UI_TEXT);
             tft.setCursor(30, yPos);
             tft.print("| ");
             tft.print(active_submenu_items[i]);
         }
+        // Highlight currently-selected feature row (if a feature is selected).
+        if (current_submenu_index >= 0 && current_submenu_index < featureCount) {
+            const int new_yPos = pagedSubmenuItemY(current_submenu_index);
+            if (new_yPos >= 0) {
+                tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+                tft.setTextColor(UI_ICON, UI_BG);
+                tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
+                tft.setCursor(30, new_yPos);
+                tft.print("| ");
+                tft.print(active_submenu_items[current_submenu_index]);
+            }
+        }
+#if defined(BOARD_ESP32_WROOM_OLED)
+        drawPagedSubmenuScrollbar();
+#endif
         drawPagedFooterButtons();
         submenu_initialized = true;
         last_submenu_index = -1;
@@ -953,22 +1143,27 @@ void displayPagedSubmenu() {
 
     if (last_submenu_index != current_submenu_index) {
         if (last_submenu_index >= 0 && last_submenu_index < featureCount) {
-            const int prev_yPos = 30 + last_submenu_index * 30;
-            tft.setTextColor(UI_TEXT, UI_BG);
-            tft.drawBitmap(10, prev_yPos, active_submenu_icons[last_submenu_index], 16, 16, UI_TEXT);
-            tft.setCursor(30, prev_yPos);
-            tft.print("| ");
-            tft.print(active_submenu_items[last_submenu_index]);
+            const int prev_yPos = pagedSubmenuItemY(last_submenu_index);
+            if (prev_yPos >= 0) {
+                tft.setTextColor(UI_TEXT, UI_BG);
+                tft.drawBitmap(10, prev_yPos, active_submenu_icons[last_submenu_index], 16, 16, UI_TEXT);
+                tft.setCursor(30, prev_yPos);
+                tft.print("| ");
+                tft.print(active_submenu_items[last_submenu_index]);
+            }
         }
 
         if (current_submenu_index >= 0 && current_submenu_index < featureCount) {
-            const int new_yPos = 30 + current_submenu_index * 30;
-            tft.setTextColor(UI_ICON, UI_BG);
-            tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
-            tft.setCursor(30, new_yPos);
-            tft.print("| ");
-            tft.print(active_submenu_items[current_submenu_index]);
-            s_pagedFooterFocus = -1;
+            const int new_yPos = pagedSubmenuItemY(current_submenu_index);
+            if (new_yPos >= 0) {
+                tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+                tft.setTextColor(UI_ICON, UI_BG);
+                tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
+                tft.setCursor(30, new_yPos);
+                tft.print("| ");
+                tft.print(active_submenu_items[current_submenu_index]);
+                s_pagedFooterFocus = -1;
+            }
         } else if (current_submenu_index == pagedBackBtnIndex()) {
             s_pagedFooterFocus = 0;
         } else if (current_submenu_index == pagedPageBtnIndex()) {

@@ -1385,9 +1385,20 @@ void displayLogo(uint16_t color, int displayTime) {
 
 namespace Terminal {
 
+// On OLED (128x64 mapped from 240x320), the original 16 source-px line height
+// maps to only 3 OLED px — far too small for the 8 px font at size=1. Bump it
+// to 40 source-px (= 8 OLED px = one font line height) so terminal lines
+// don't overlap. TOP_FIXED_AREA stays at 86 source-px (≈17 OLED px) for the
+// status/title bars at the top.
+#if defined(BOARD_ESP32_WROOM_OLED)
+#define TEXT_HEIGHT 40
+#define BOT_FIXED_AREA 0
+#define TOP_FIXED_AREA 86
+#else
 #define TEXT_HEIGHT 16
 #define BOT_FIXED_AREA 0
 #define TOP_FIXED_AREA 86
+#endif
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 320
 #define SCREEN_WIDTH 240
@@ -1575,9 +1586,23 @@ void runUI() {
 }
 
 void scrollAddress(uint16_t vsp) {
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // On SSD1306 there is no ILI9341-style hardware vertical scroll register.
+  // Instead, we use a software scroll: shift the SSD1306 framebuffer up by
+  // TEXT_HEIGHT source-px (mapped to OLED pixels). The terminal's circular
+  // yStart bookkeeping above is preserved for source-space cursor math, but
+  // the actual on-screen scroll is performed by scrollUp() in DisplayAdapter.
+  //
+  // TEXT_HEIGHT is 16 source-px (defined above); mapped to OLED = 16*64/320
+  // = 3 px, which is too small to clear an 8-px font row. Round up to a full
+  // font-line height (8 OLED px) so each new line clears the previous glyph.
+  constexpr uint8_t OLED_LINE_PX = 8;
+  tft.scrollUp(OLED_LINE_PX);
+#else
   tft.writecommand(ILI9341_VSCRSADD);
   tft.writedata(vsp >> 8);
   tft.writedata(vsp);
+#endif
 }
 
 int scroll_line() {

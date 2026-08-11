@@ -329,40 +329,33 @@ void TFT_eSPI::setTextFont(uint8_t f) {
 
 int16_t TFT_eSPI::textWidth(const char *str) {
     if (!str) return 0;
-    // Adafruit_GFX default font: 5px per char + 1px spacing, scaled by text size.
-    // We approximate original TFT_eSPI font widths:
-    //   font 1 -> 6px/char; font 2 -> 12px/char; font 4 -> 16px/char.
-    int16_t perChar;
-    switch (_font) {
-        case 2:  perChar = 12; break;
-        case 4:  perChar = 16; break;
-        case 6:  perChar = 14; break;
-        case 7:  perChar = 16; break;
-        case 8:  perChar = 18; break;
-        default: perChar = 6;  break;
-    }
-    return (int16_t)strlen(str) * perChar * (_textSize ? _textSize : 1);
+    // Adafruit_GFX default font at OLED size=2: 12px per char (6px * size 2).
+    // Map back to original 240x320 coordinate space so the project's layout
+    // math (e.g. centering, right-alignment) places strings correctly.
+    int16_t perCharOled = 6 * scaledTextSize();
+    int16_t perCharOrig = (int16_t)((int32_t)perCharOled * TFT_WIDTH / OLED_SCREEN_WIDTH);
+    return (int16_t)strlen(str) * perCharOrig;
 }
 
 int16_t TFT_eSPI::fontHeight(int8_t /*font*/) {
-    switch (_font) {
-        case 2:  return 16 * (_textSize ? _textSize : 1);
-        case 4:  return 20 * (_textSize ? _textSize : 1);
-        case 6:  return 14 * (_textSize ? _textSize : 1);
-        case 7:  return 18 * (_textSize ? _textSize : 1);
-        case 8:  return 22 * (_textSize ? _textSize : 1);
-        default: return 8  * (_textSize ? _textSize : 1);
-    }
+    // 8px (Adafruit_GFX default) * OLED text size, mapped back to original
+    // 240x320 space so the project's row-height calculations match what we
+    // actually render on the OLED.
+    int16_t hOled = 8 * scaledTextSize();
+    return (int16_t)((int32_t)hOled * TFT_HEIGHT / OLED_SCREEN_HEIGHT);
 }
 
 size_t TFT_eSPI::write(uint8_t c) {
     if (!_oled) return 1;
+    // Render text directly in OLED pixel space (NOT scaled). The 240x320 layout
+    // positions the cursor via sx()/sy() but the glyph itself is drawn at OLED
+    // size=2 (10-12px). This avoids the "embaralhado" effect where text was
+    // rendered at size=1 (5x7px) and overlapped because the cursor advance
+    // (in 240x320 space) didn't match the glyph width.
     int16_t ox = sx(_cursorX), oy = sy(_cursorY);
     uint8_t  ts = scaledTextSize();
     uint16_t fg = colorToInk(_fgColor);
     uint16_t bg = (_bgColor == _fgColor) ? fg : colorToBg(_bgColor);
-    // Adafruit_GFX drawChar advances cursor internally — but we manage cursor
-    // ourselves in original space so rendering stays consistent.
     _oled->setCursor(ox, oy);
     _oled->setTextSize(ts);
     _oled->setTextColor(fg, bg);
@@ -370,9 +363,11 @@ size_t TFT_eSPI::write(uint8_t c) {
     _oled->write(c);
     flush();
 
-    // Advance cursor in ORIGINAL coordinate space (so subsequent print()s chain).
-    // Approximate char advance: 6 * textSize (matches Adafruit_GFX default).
-    _cursorX += 6 * (_textSize ? _textSize : 1);
+    // Advance cursor in OLED space by the actual glyph width (6 * ts), then
+    // map back to original 240x320 space so the project's coordinate system
+    // stays consistent. This keeps characters from overlapping.
+    int16_t advanceOled = 6 * ts;
+    _cursorX += (int16_t)((int32_t)advanceOled * TFT_WIDTH / OLED_SCREEN_WIDTH);
     return 1;
 }
 

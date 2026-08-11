@@ -15,6 +15,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <SPI.h>              /* for SPIClass / SPI default arg in begin() */
 #include <LittleFS.h>
 #include <FS.h>
 

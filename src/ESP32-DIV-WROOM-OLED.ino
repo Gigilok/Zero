@@ -789,7 +789,12 @@ bool isButtonPressedEdge(int buttonPin) {
 }
 
 bool featureExitButtonPressed() {
-  return isPhysicalButtonPressed(BTN_SELECT) || isTouchNavButtonPressed(BTN_SELECT);
+  // On BOARD_ESP32_WROOM_OLED the user has 4 buttons:
+  //   BTN_UP (GPIO 5), BTN_DOWN (GPIO 27), BTN_SELECT (GPIO 32), BTN_LEFT (GPIO 33).
+  // The black-wired button (BTN_LEFT) is the dedicated BACK / EXIT button.
+  // Long-pressing SELECT also exits a feature (legacy behavior on other boards).
+  return isPhysicalButtonPressed(BTN_LEFT) || isTouchNavButtonPressed(BTN_LEFT) ||
+         isPhysicalButtonPressed(BTN_SELECT) || isTouchNavButtonPressed(BTN_SELECT);
 }
 
 static void showFeatureUnavailable(const char* featureName, const char* requirement) {
@@ -4350,6 +4355,35 @@ void handleSettingsSubmenuButtons() {
 }
 
 void handleButtons() {
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // Dedicated BACK button (black wire, GPIO 33, mapped to BTN_LEFT).
+    // Pressing it anywhere — main menu, submenu, or active feature — returns
+    // to the previous level. This gives the user a consistent "voltar" button
+    // matching the 4-button hardware spec.
+    if (isButtonPressed(BTN_LEFT)) {
+        if (feature_active && !feature_exit_requested) {
+            // Inside a feature (scanner, replay, terminal, etc.) — request exit.
+            // The feature's loop will see this flag and return control.
+            feature_exit_requested = true;
+            last_interaction_time = millis();
+            delay(200);   // debounce
+            return;
+        } else if (in_sub_menu) {
+            // Inside a submenu (list of features) — return to main menu.
+            in_sub_menu = false;
+            feature_active = false;
+            feature_exit_requested = false;
+            current_submenu_index = 0;
+            is_main_menu = false;
+            displayMenu();
+            last_interaction_time = millis();
+            delay(200);   // debounce
+            return;
+        }
+        // In main menu: BTN_LEFT does nothing (already at top level).
+    }
+#endif
+
     if (in_sub_menu) {
         switch (current_menu_index) {
 

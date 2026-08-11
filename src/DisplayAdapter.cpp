@@ -257,6 +257,19 @@ void TFT_eSPI::drawXBitmap(int16_t x, int16_t y, const uint8_t *bitmap,
     flush();
 }
 
+void TFT_eSPI::drawXBitmap(int16_t x, int16_t y, const uint8_t *bitmap,
+                           int16_t w, int16_t h, uint16_t color, uint16_t bg) {
+    if (!_oled) return;
+    int16_t ox = sx(x), oy = sy(y);
+    int16_t ow = sw(w), oh = sh(h);
+    // Two-pass: fill background, then draw foreground XBM on top.
+    // Adafruit_GFX's drawXBitmap (6-arg) draws 1-bits as `color` and leaves
+    // 0-bits transparent, so we pre-fill with bg first.
+    _oled->fillRect(ox, oy, ow, oh, colorToBg(bg));
+    _oled->drawXBitmap(ox, oy, bitmap, ow, oh, colorToInk(color));
+    flush();
+}
+
 void TFT_eSPI::pushImage(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *data) {
     if (!_oled) return;
     int16_t ox = sx(x), oy = sy(y);

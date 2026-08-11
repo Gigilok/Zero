@@ -1,4 +1,4 @@
-#ifndef UTILS_H
+ #ifndef UTILS_H
 #define UTILS_H
 
 #include "SDFlashAdapter.h"  /* replaces <SD.h> — backed by LittleFS */
@@ -84,6 +84,15 @@ bool initPcf8574Buttons();
 uint8_t getPcf8574Address();
 void sdSpiInit();
 bool sdMountChipSelect(uint8_t cs);
+
+// ---- Buzzer helpers -------------------------------------------------------
+// On BOARD_ESP32_WROOM_OLED the buzzer is on GPIO 4 (active/passive, driven
+// via the ESP32 LEDC peripheral). These helpers wrap the LEDC setup so any
+// feature can play a beep without duplicating code.
+void buzzerInit();               // call once in setup()
+void buzzerBeep(uint16_t hz = 2200, uint16_t ms = 60);  // blocking-ish (background-poll)
+void buzzerPoll();               // call in loop() to auto-silence after ms expires
+void buzzerClick();              // short UI click (2400 Hz, 30 ms) — for button feedback
 
 extern float currentBatteryVoltage;
 

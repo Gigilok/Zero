@@ -36,6 +36,7 @@
 #include "esp_gap_bt_api.h"
 
 #include "arduinoFFT.h"
+#include "FFTCompat.h"   /* v1→v2 arduinoFFT API shim */
 #include "ELECHOUSE_CC1101_SRC_DRV.h"
 #include "utils.h"
 #include "shared.h"

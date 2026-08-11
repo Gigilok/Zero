@@ -20,6 +20,7 @@
 #include <string>
 #include "WiFi.h"
 #include "arduinoFFT.h"
+#include "FFTCompat.h"   /* v1→v2 arduinoFFT API shim */
 #include "esp_event.h"           /* esp_event_loop.h is deprecated; esp_event.h replaces it */
 #include "esp_system.h"
 #include "esp_wifi.h"

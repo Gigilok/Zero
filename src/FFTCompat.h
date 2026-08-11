@@ -53,24 +53,32 @@ public:
     arduinoFFT() : _fft() {}
 
     // v1-compatible method: Windowing(vReal, samples, winType, dir)
+    //
+    // v2's setArrays() signature is `setArrays(T* vReal, T* vImag, uint_fast16_t samples)`
+    // — there is no sampling-frequency parameter on this method (it is set
+    // separately via the constructor or setSamplingFrequency() if needed).
+    //
+    // v1's Windowing() did not take a vImag argument, so we pass a scratch
+    // double — setArrays() just stores the pointer; the actual complex data
+    // is supplied later via Compute().
     void Windowing(double *vReal, uint16_t samples,
                    FFTWindow winType, FFTDirection dir) {
         double scratch = 0.0;
         double *imagPtr = _safeImag(nullptr, scratch);
-        _fft.setArrays(vReal, imagPtr, samples, _samplingFreq);
+        _fft.setArrays(vReal, imagPtr, samples);
         _fft.windowing(winType, dir);
     }
 
     // v1-compatible method: Compute(vReal, vImag, samples, dir)
     void Compute(double *vReal, double *vImag, uint16_t samples,
                  FFTDirection dir) {
-        _fft.setArrays(vReal, vImag, samples, _samplingFreq);
+        _fft.setArrays(vReal, vImag, samples);
         _fft.compute(dir);
     }
 
     // v1-compatible method: ComplexToMagnitude(vReal, vImag, samples)
     void ComplexToMagnitude(double *vReal, double *vImag, uint16_t samples) {
-        _fft.setArrays(vReal, vImag, samples, _samplingFreq);
+        _fft.setArrays(vReal, vImag, samples);
         _fft.complexToMagnitude();
     }
 

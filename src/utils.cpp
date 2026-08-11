@@ -951,6 +951,64 @@ bool sdMountChipSelect(uint8_t cs) {
 #endif
 }
 
+// ---- Buzzer helpers (BOARD_ESP32_WROOM_OLED) ---------------------------
+// GPIO 4 buzzer driven via LEDC channel 7 (same channel as subghz.cpp's
+// replayBeep uses, so they don't conflict). These helpers provide:
+//   buzzerInit()     — call once in setup() to configure the GPIO
+//   buzzerBeep(hz,ms) — start a tone; auto-silenced by buzzerPoll()
+//   buzzerPoll()     — call in loop() to silence after the ms duration
+//   buzzerClick()    — short UI feedback beep for button presses
+//
+// On Arduino-ESP32 v2.0.17 (espressif32@6.5.0) we use the legacy LEDC API:
+//   ledcSetup(ch, freq, res)        — configure channel
+//   ledcAttachPin(pin, ch)          — bind pin to channel
+//   ledcWriteTone(ch, freq)         — output square wave at freq (0 = off)
+//   ledcDetachPin(pin)              — release pin
+#if defined(BOARD_ESP32_WROOM_OLED) && defined(BUZZER_PIN) && BUZZER_PIN >= 0
+static constexpr uint8_t  BUZZER_LEDC_CH  = 7;
+static constexpr uint16_t BUZZER_LEDC_FREQ= 4000;
+static constexpr uint8_t  BUZZER_LEDC_RES = 8;
+static bool    s_buzzerArmed   = false;
+static uint32_t s_buzzerOffAtMs = 0;
+
+void buzzerInit() {
+  // Configure the GPIO as output low (silent). The LEDC channel is set up
+  // lazily in buzzerBeep() so we don't keep a 4 kHz carrier running when the
+  // buzzer is idle.
+  ::pinMode(BUZZER_PIN, OUTPUT);
+  ::digitalWrite(BUZZER_PIN, LOW);
+  Serial.println(F("[buzzer] GPIO 4 configured"));
+}
+
+void buzzerBeep(uint16_t hz, uint16_t ms) {
+  ledcSetup(BUZZER_LEDC_CH, BUZZER_LEDC_FREQ, BUZZER_LEDC_RES);
+  ledcAttachPin(BUZZER_PIN, BUZZER_LEDC_CH);
+  ledcWriteTone(BUZZER_LEDC_CH, hz);
+  s_buzzerArmed = true;
+  s_buzzerOffAtMs = millis() + ms;
+}
+
+void buzzerPoll() {
+  if (!s_buzzerArmed) return;
+  if ((int32_t)(millis() - s_buzzerOffAtMs) < 0) return;
+  ledcWriteTone(BUZZER_LEDC_CH, 0);
+  ledcDetachPin(BUZZER_PIN);
+  ::pinMode(BUZZER_PIN, OUTPUT);
+  ::digitalWrite(BUZZER_PIN, LOW);
+  s_buzzerArmed = false;
+}
+
+void buzzerClick() {
+  buzzerBeep(2400, 30);
+}
+#else
+// Non-OLED boards or no buzzer pin — no-op stubs.
+void buzzerInit() {}
+void buzzerBeep(uint16_t /*hz*/, uint16_t /*ms*/) {}
+void buzzerPoll() {}
+void buzzerClick() {}
+#endif
+
 void initSDCard() {
 
 #ifdef SD_CD

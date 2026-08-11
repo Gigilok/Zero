@@ -195,6 +195,71 @@ void TFT_eSPI::fillScreen(uint16_t color) {
     flush();
 }
 
+// ---------- Software vertical scroll ----------
+// Shifts the SSD1306 framebuffer up by `pixelRows` rows. The bottom `pixelRows`
+// rows are cleared. Implementation uses Adafruit_SSD1306::getBuffer() which
+// exposes the 1024-byte framebuffer (128 cols × 8 pages, each page = 8 vertical
+// pixels, LSB at top).
+//
+// For full-page shifts (pixelRows % 8 == 0): trivial memmove of whole pages.
+// For sub-page shifts: bit-shift each byte, pulling bits from the next page.
+//
+// Background color for the cleared rows = current "dark" mapping (SSD1306_BLACK
+// in our BLACK-background theme). We use SSD1306_BLACK explicitly since the
+// OLED theme is fixed black-bg after Task 12.
+void TFT_eSPI::scrollUp(uint8_t pixelRows) {
+    if (!_oled || pixelRows == 0) return;
+    if (pixelRows >= OLED_SCREEN_HEIGHT) {
+        // Scroll everything off — just clear.
+        _oled->fillScreen(SSD1306_BLACK);
+        flush();
+        return;
+    }
+
+    uint8_t *buf = _oled->getBuffer();
+    if (!buf) return;
+    const int PAGES = OLED_SCREEN_HEIGHT / 8;   // 8 pages
+    const int COLS  = OLED_SCREEN_WIDTH;        // 128 cols
+    const int pageShift = pixelRows / 8;
+    const int bitShift  = pixelRows & 7;
+
+    if (bitShift == 0) {
+        // Whole-page shift: simple memmove.
+        const int movePages = PAGES - pageShift;
+        if (movePages > 0) {
+            memmove(buf, buf + pageShift * COLS, (size_t)movePages * COLS);
+        }
+        // Zero the freed pages at the bottom.
+        memset(buf + movePages * COLS, 0, (size_t)pageShift * COLS);
+    } else {
+        // Sub-page shift: combine bits from current and next page.
+        // For each output page p (0..PAGES-1-pageShift), each column c:
+        //   buf[p][c] = (buf[p+pageShift][c] >> bitShift)
+        //             | (buf[p+pageShift+1][c] << (8 - bitShift))
+        // (with the last source page providing 0 for the high bits.)
+        for (int p = 0; p < PAGES - pageShift; ++p) {
+            const int srcIdxLo = (p + pageShift)     * COLS;
+            const int srcIdxHi = (p + pageShift + 1) * COLS;
+            for (int c = 0; c < COLS; ++c) {
+                uint8_t lo = buf[srcIdxLo + c] >> bitShift;
+                uint8_t hi = 0;
+                if (p + pageShift + 1 < PAGES) {
+                    hi = buf[srcIdxHi + c] << (8 - bitShift);
+                }
+                buf[p * COLS + c] = lo | hi;
+            }
+        }
+        // Zero the freed bottom pages.
+        const int freedPages = pageShift + 1;
+        const int startClear = PAGES - freedPages;
+        if (startClear < PAGES) {
+            memset(buf + startClear * COLS, 0,
+                   (size_t)(PAGES - startClear) * COLS);
+        }
+    }
+    flush();
+}
+
 // ---------- Bitmaps ----------
 void TFT_eSPI::drawBitmap(int16_t x, int16_t y, const uint8_t *bitmap,
                           int16_t w, int16_t h, uint16_t color) {

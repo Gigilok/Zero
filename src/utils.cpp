@@ -821,6 +821,17 @@ bool initPcf8574Buttons() {
   pcf.pinMode(BTN_RIGHT, INPUT_PULLUP);
   pcf.pinMode(BTN_SELECT, INPUT_PULLUP);
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // No PCF8574 chip on this board — the PCF8574Adapter shim reads GPIO pins
+  // 5/27/32/33 directly. Skip the I2C address scan entirely and report a
+  // non-zero pseudo-address so isPhysicalButtonPressed() (which checks
+  // getPcf8574Address() != 0) will actually read the buttons.
+  pcf.begin(PCF8574_I2C_ADDR);
+  s_pcf8574Addr = PCF8574_I2C_ADDR;
+  Serial.println(F("[PCF8574Adapter] GPIO buttons configured (no I2C scan needed)"));
+  return true;
+#endif
+
 #if PCF8574_AUTO_DETECT
   for (uint8_t addr = PCF8574_ADDR_MIN; addr <= PCF8574_ADDR_MAX; addr++) {
     yield();

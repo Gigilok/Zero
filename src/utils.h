@@ -1,4 +1,4 @@
- #ifndef UTILS_H
+#ifndef UTILS_H
 #define UTILS_H
 
 #include "SDFlashAdapter.h"  /* replaces <SD.h> — backed by LittleFS */

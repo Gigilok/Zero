@@ -141,6 +141,17 @@
 #define OLED_I2C_ADDR      0x3C
 #define OLED_RESET_PIN     -1  // -1 = share reset with ESP32
 
+// ILI9341 scroll command opcodes (used by utils.cpp's terminal scroll code).
+// On the SSD1306 OLED these are no-ops — tft.writecommand() / tft.writedata()
+// are stubbed to empty functions below — but the constants must exist so the
+// project's source compiles unmodified.
+#ifndef ILI9341_VSCRDEF
+#define ILI9341_VSCRDEF   0x33
+#endif
+#ifndef ILI9341_VSCRSADD
+#define ILI9341_VSCRSADD  0x37
+#endif
+
 class TFT_eSPI : public Print {
 public:
     TFT_eSPI();
@@ -215,6 +226,10 @@ public:
 
     void drawChar(int16_t x, int16_t y, unsigned char c,
                   uint16_t color, uint16_t bg, uint8_t size);
+    // 4-arg overload (TFT_eSPI convention) — uses current text color/size and
+    // returns the character's width so the caller can advance the cursor.
+    // Used by utils.cpp's terminal: `xPos += tft.drawChar(data, xPos, yDraw, 2);`
+    int16_t drawChar(unsigned char c, int16_t x, int16_t y, uint8_t size);
     void drawString(const char *str, int16_t x, int16_t y);
     void drawString(const String &str, int16_t x, int16_t y) { drawString(str.c_str(), x, y); }
     // 4-arg overloads with a trailing `font` parameter (TFT_eSPI convention).

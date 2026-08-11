@@ -305,8 +305,12 @@ private:
     inline int16_t sh(int16_t h) const { return (int16_t)((int32_t)h * OLED_SCREEN_HEIGHT / TFT_HEIGHT); }
 
     // Map original textSize (used in 240x320 space) to OLED-space integer size.
-    // 0 or 1 -> 1; >=2 -> 1 (we keep size 1 because 240->128 scale is ~0.53).
-    inline uint8_t scaledTextSize() const { return (_textSize < 2) ? 1 : 1; }
+    // The original 240x320 layout was designed for textSize=1 (8px font) on a
+    // large TFT. On the 128x64 OLED, size=1 (8px) is unreadably tiny, so we
+    // bump the minimum to 2 (10-12px effective). textSize=2+ in the source
+    // becomes size=2 (still readable, fits the 128px width).
+    // Without this, menu text was 5x7 pixels — illegible "embaralhado" output.
+    inline uint8_t scaledTextSize() const { return (_textSize < 2) ? 2 : 2; }
 
     void flush();
 };

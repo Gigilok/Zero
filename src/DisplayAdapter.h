@@ -253,6 +253,20 @@ public:
     void writedata(uint8_t)     {}
     void spiwrite(uint8_t)      {}
 
+    // ---- Software vertical scroll (OLED replacement for ILI9341 hardware scroll) ----
+    // Shifts the SSD1306 framebuffer UP by `pixelRows` rows (0..64). The bottom
+    // `pixelRows` rows are erased (filled with the background ink value). Call
+    // display() afterwards (or rely on the next primitive's auto-flush).
+    //
+    // This is the standard software-scroll technique for SSD1306: getBuffer()
+    // exposes the 1024-byte framebuffer (128 cols × 8 pages of 8 vertical px),
+    // and we memmove pages + bit-shift partial-page remainders.
+    //
+    // Used by Terminal::scroll_line() (utils.cpp) and any feature that needs
+    // terminal-style line scrolling. pixelRows should typically equal the
+    // font's line height (e.g. 8 for size=1, 16 for size=2).
+    void scrollUp(uint8_t pixelRows);
+
     // ---- Touch stubs (the OLED board has no touch) ----
     uint8_t  getTouchRaw(uint16_t *x = nullptr, uint16_t *y = nullptr) { if (x) *x = 0; if (y) *y = 0; return false; }
     uint16_t getTouchRawZ() { return 0; }
@@ -305,12 +319,19 @@ private:
     inline int16_t sh(int16_t h) const { return (int16_t)((int32_t)h * OLED_SCREEN_HEIGHT / TFT_HEIGHT); }
 
     // Map original textSize (used in 240x320 space) to OLED-space integer size.
-    // The original 240x320 layout was designed for textSize=1 (8px font) on a
-    // large TFT. On the 128x64 OLED, size=1 (8px) is unreadably tiny, so we
-    // bump the minimum to 2 (10-12px effective). textSize=2+ in the source
-    // becomes size=2 (still readable, fits the 128px width).
-    // Without this, menu text was 5x7 pixels — illegible "embaralhado" output.
-    inline uint8_t scaledTextSize() const { return (_textSize < 2) ? 2 : 2; }
+    //
+    // On the 128x64 OLED, Adafruit_GFX size=1 (6x8 px per char) gives 21 chars
+    // per line × 8 lines — the same visual density the original 240x320 layout
+    // was designed for (size=1 = 6 px advance × 40 chars on 240 px wide TFT).
+    // Size=2 (12x16 px) only fits 10 chars × 4 lines and made menu text
+    // "enormous" / overlapping per user feedback.
+    //
+    // We now ALWAYS render at size=1 regardless of source _textSize. The
+    // original layout's larger textSize calls (e.g. drawString(...,2)) were
+    // meant for a 240x320 TFT where size=2 = 12 px tall — proportionally the
+    // SAME as size=1 on the 128x64 OLED. Forcing size=1 here keeps the visual
+    // proportions correct while staying readable.
+    inline uint8_t scaledTextSize() const { return 1; }
 
     void flush();
 };

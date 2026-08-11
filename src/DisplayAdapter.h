@@ -269,24 +269,22 @@ public:
     // ---- Color mapping (public so TFT_eSprite can reuse it) ----
     // Maps a 16-bit TFT color to a 1-bit OLED ink value.
     //
-    // WHITE BACKGROUND theme: the panel shows a white field by default, and we
-    // draw BLACK INK on top. To preserve contrast for BOTH themes:
-    //   - LIGHT source colors (TFT_WHITE, BG_Light, etc.) -> pixel OFF in buffer
-    //     -> panel shows BLACK (used as ink on a white field, or as a "selected"
-    //     highlight rectangle)
-    //   - DARK  source colors (TFT_BLACK, BG_Dark, etc.)  -> pixel ON  in buffer
-    //     -> panel shows WHITE (used as background fill, so dark UI backgrounds
-    //     render as a white field on the OLED)
+    // BLACK BACKGROUND theme (default after user testing — the OLED's natural
+    // off-state is black, which gives better contrast than inverted white):
+    //   - LIGHT source colors (TFT_WHITE, BG_Light, light text)  -> pixel ON
+    //     -> panel shows WHITE (used as ink / text on a black field)
+    //   - DARK  source colors (TFT_BLACK, BG_Dark, dark bg fills) -> pixel OFF
+    //     -> panel shows BLACK (used as background fill)
     //
-    // The net effect: any UI drawn with the project's default Dark theme
-    // (dark bg + light text) appears on the OLED as WHITE BACKGROUND with BLACK
-    // INK - exactly what the user asked for.
+    // The net effect: the project's default Dark theme (dark bg + light text)
+    // appears on the OLED as BLACK BACKGROUND with WHITE INK — the standard
+    // OLED look.
     static bool isLightColor(uint16_t c);
     static inline uint16_t colorToInk(uint16_t c) {
-        return isLightColor(c) ? SSD1306_BLACK : SSD1306_WHITE;
+        return isLightColor(c) ? SSD1306_WHITE : SSD1306_BLACK;
     }
     static inline uint16_t colorToBg(uint16_t c) {
-        return isLightColor(c) ? SSD1306_BLACK : SSD1306_WHITE;
+        return isLightColor(c) ? SSD1306_WHITE : SSD1306_BLACK;
     }
 
 private:

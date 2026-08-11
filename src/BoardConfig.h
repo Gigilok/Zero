@@ -9,7 +9,10 @@
 
 // >>> NEW: ESP32 WROOM 30-pin + 0.96" OLED SSD1306 + GPIO buttons (no SD, no touch).
 //     Flash storage via LittleFS replaces the SD card.
+// May also be defined via -DBOARD_ESP32_WROOM_OLED=1 in platformio.ini build_flags.
+#ifndef BOARD_ESP32_WROOM_OLED
 #define BOARD_ESP32_WROOM_OLED
+#endif
 
 // Set to 0 to hide the on-screen touch nav bar (5 footer buttons).
 // Touch button input will still work when this is disabled.

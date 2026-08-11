@@ -20,8 +20,7 @@
 #include <string>
 #include "WiFi.h"
 #include "arduinoFFT.h"
-#include "esp_event.h"
-#include "esp_event_loop.h"
+#include "esp_event.h"           /* esp_event_loop.h is deprecated; esp_event.h replaces it */
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"

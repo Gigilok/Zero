@@ -30,6 +30,36 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// Adafruit_SSD1306.h #defines common color names (BLACK, WHITE, RED, GREEN,
+// BLUE, YELLOW, CYAN, MAGENTA) as macros that expand to SSD1306_* constants.
+// The project's shared.h then declares `const uint16_t BLACK = 0x0000;` etc.,
+// which the preprocessor turns into `const uint16_t 0 = 0x0000;` — a syntax
+// error. #undef them here so the names are free for shared.h to claim.
+#ifdef BLACK
+#undef BLACK
+#endif
+#ifdef WHITE
+#undef WHITE
+#endif
+#ifdef RED
+#undef RED
+#endif
+#ifdef GREEN
+#undef GREEN
+#endif
+#ifdef BLUE
+#undef BLUE
+#endif
+#ifdef YELLOW
+#undef YELLOW
+#endif
+#ifdef CYAN
+#undef CYAN
+#endif
+#ifdef MAGENTA
+#undef MAGENTA
+#endif
+
 // ---- Original screen coordinate space (kept identical to TFT_eSPI build) ----
 #ifndef TFT_WIDTH
 #define TFT_WIDTH  240
@@ -152,6 +182,10 @@ public:
                     int16_t w, int16_t h, uint16_t color, uint16_t bg);
     void drawXBitmap(int16_t x, int16_t y, const uint8_t *bitmap,
                      int16_t w, int16_t h, uint16_t color);
+    // 7-arg variant with background color (Adafruit_GFX convention). The bg
+    // fills "0" bits in the XBM data; the color fills "1" bits.
+    void drawXBitmap(int16_t x, int16_t y, const uint8_t *bitmap,
+                     int16_t w, int16_t h, uint16_t color, uint16_t bg);
     void pushImage(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *data);
     void pushRect(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *data);
 
@@ -173,12 +207,21 @@ public:
     uint8_t getTextFont() const { return _font; }
     int16_t textWidth(const char *str);
     int16_t textWidth(const String &str) { return textWidth(str.c_str()); }
+    // 2-arg overload with a `font` parameter (TFT_eSPI convention). Font is
+    // ignored on the OLED; we honor the call so the project compiles unchanged.
+    int16_t textWidth(const char *str, uint8_t /*font*/) { return textWidth(str); }
+    int16_t textWidth(const String &str, uint8_t font) { return textWidth(str.c_str(), font); }
     int16_t fontHeight(int8_t font = -1);
 
     void drawChar(int16_t x, int16_t y, unsigned char c,
                   uint16_t color, uint16_t bg, uint8_t size);
     void drawString(const char *str, int16_t x, int16_t y);
     void drawString(const String &str, int16_t x, int16_t y) { drawString(str.c_str(), x, y); }
+    // 4-arg overloads with a trailing `font` parameter (TFT_eSPI convention).
+    // The font number is ignored on the OLED (single built-in font), but the
+    // signature must match because the project calls e.g. drawString(s, x, y, 2).
+    void drawString(const char *str, int16_t x, int16_t y, uint8_t /*font*/) { drawString(str, x, y); }
+    void drawString(const String &str, int16_t x, int16_t y, uint8_t font) { drawString(str.c_str(), x, y, font); }
     void drawCentreString(const char *str, int16_t x, int16_t y, uint8_t = 1);
     void drawCentreString(const String &s, int16_t x, int16_t y, uint8_t f = 1);
     void drawRightString(const char *str, int16_t x, int16_t y, uint8_t = 1);
@@ -186,6 +229,7 @@ public:
     void drawNumber(long n, int16_t x, int16_t y);
     void drawNumber(long n, int16_t x, int16_t y, uint8_t) { drawNumber(n, x, y); }
     void drawFloat(float fl, uint8_t dp, int16_t x, int16_t y);
+    void drawFloat(float fl, uint8_t dp, int16_t x, int16_t y, uint8_t) { drawFloat(fl, dp, x, y); }
 
     // ---- Raw SPI passthrough stubs (no-op on I2C OLED) ----
     void startWrite() {}
@@ -207,6 +251,29 @@ public:
     // Returns the underlying SSD1306 driver (used by utils.cpp status bar / etc.).
     Adafruit_SSD1306 *oled() { return _oled; }
 
+    // ---- Color mapping (public so TFT_eSprite can reuse it) ----
+    // Maps a 16-bit TFT color to a 1-bit OLED ink value.
+    //
+    // WHITE BACKGROUND theme: the panel shows a white field by default, and we
+    // draw BLACK INK on top. To preserve contrast for BOTH themes:
+    //   - LIGHT source colors (TFT_WHITE, BG_Light, etc.) -> pixel OFF in buffer
+    //     -> panel shows BLACK (used as ink on a white field, or as a "selected"
+    //     highlight rectangle)
+    //   - DARK  source colors (TFT_BLACK, BG_Dark, etc.)  -> pixel ON  in buffer
+    //     -> panel shows WHITE (used as background fill, so dark UI backgrounds
+    //     render as a white field on the OLED)
+    //
+    // The net effect: any UI drawn with the project's default Dark theme
+    // (dark bg + light text) appears on the OLED as WHITE BACKGROUND with BLACK
+    // INK - exactly what the user asked for.
+    static bool isLightColor(uint16_t c);
+    static inline uint16_t colorToInk(uint16_t c) {
+        return isLightColor(c) ? SSD1306_BLACK : SSD1306_WHITE;
+    }
+    static inline uint16_t colorToBg(uint16_t c) {
+        return isLightColor(c) ? SSD1306_BLACK : SSD1306_WHITE;
+    }
+
 private:
     Adafruit_SSD1306 *_oled;
     uint8_t  _rotation;
@@ -217,28 +284,6 @@ private:
     uint8_t  _textDatum;
     uint8_t  _font;
     bool     _autoDisplay;
-
-    // Convert a 16-bit TFT color to a 1-bit OLED ink value.
-    //
-    // WHITE BACKGROUND theme: the panel shows a white field by default, and we
-    // draw BLACK INK on top. To preserve contrast for BOTH themes:
-    //   - LIGHT source colors (TFT_WHITE, BG_Light, etc.) → pixel OFF in buffer
-    //     → panel shows BLACK (used as ink on a white field, or as a "selected"
-    //     highlight rectangle)
-    //   - DARK  source colors (TFT_BLACK, BG_Dark, etc.)  → pixel ON  in buffer
-    //     → panel shows WHITE (used as background fill, so dark UI backgrounds
-    //     render as a white field on the OLED)
-    //
-    // The net effect: any UI drawn with the project's default Dark theme
-    // (dark bg + light text) appears on the OLED as WHITE BACKGROUND with BLACK
-    // INK — exactly what the user asked for.
-    static bool isLightColor(uint16_t c);
-    static inline uint16_t colorToInk(uint16_t c) {
-        return isLightColor(c) ? SSD1306_BLACK : SSD1306_WHITE;
-    }
-    static inline uint16_t colorToBg(uint16_t c) {
-        return isLightColor(c) ? SSD1306_BLACK : SSD1306_WHITE;
-    }
 
     // Scale an original-coordinate to OLED pixel space.
     inline int16_t sx(int16_t x) const { return (int16_t)((int32_t)x * OLED_SCREEN_WIDTH  / TFT_WIDTH); }
@@ -251,4 +296,181 @@ private:
     inline uint8_t scaledTextSize() const { return (_textSize < 2) ? 1 : 1; }
 
     void flush();
+};
+
+// =========================================================================
+// TFT_eSprite — off-screen drawing surface (drop-in for TFT_eSPI's sprite).
+// =========================================================================
+// The project uses TFT_eSprite in gps.cpp to compose the GNSS scan panel
+// before blitting it to the screen (avoids visible progressive drawing).
+//
+// On the 1-bit OLED we implement the sprite as a GFXcanvas1 (Adafruit_GFX's
+// 1-bit-per-pixel in-memory canvas). When pushSprite(x, y) is called, the
+// canvas buffer is copied to the parent TFT_eSPI via drawXBitmap, which uses
+// the same packed format as SSD1306's internal buffer (8 vertical pixels per
+// byte, LSB at top).
+//
+// All color arguments passed to sprite primitives are mapped to 1-bit ink
+// via the same isLightColor() rule as the main display.
+//
+// setColorDepth() is accepted but ignored — the canvas is always 1-bit.
+// Create the sprite with TFT_eSprite(&tft) where tft is the global display.
+// =========================================================================
+class TFT_eSprite : public Print {
+public:
+    explicit TFT_eSprite(TFT_eSPI *parent)
+        : Print(), _parent(parent), _created(false), _canvas(nullptr),
+          _cw(0), _ch(0),
+          _fgColor(0xFFFF), _bgColor(0x0000), _textSize(1), _textDatum(0), _font(1),
+          _cursorX(0), _cursorY(0) {}
+
+    // ---- Sprite lifecycle ----
+    // createSprite allocates (or re-allocates) the canvas to the given size.
+    // Returns true on success. The original TFT_eSPI returns void; we return
+    // bool because gps.cpp checks the result. (Void-returning call sites still
+    // work - they just ignore the return value.)
+    bool createSprite(int16_t w, int16_t h) {
+        if (w <= 0 || h <= 0) return false;
+        if (_canvas) { delete _canvas; _canvas = nullptr; }
+        _canvas = new GFXcanvas1(w, h);
+        if (!_canvas) { _created = false; _cw = _ch = 0; return false; }
+        _created = true;
+        _cw = w; _ch = h;
+        _canvas->fillScreen(0);
+        return true;
+    }
+    void deleteSprite() {
+        if (_canvas) { delete _canvas; _canvas = nullptr; }
+        _created = false;
+        _cw = _ch = 0;
+    }
+    void setColorDepth(uint8_t /*bpp*/) { /* always 1-bit on OLED */ }
+    void pushSprite(int16_t x, int16_t y) {
+        if (!_parent || !_canvas) return;
+        // Canvas stores: 1 = ink (dark color drawn → black on white OLED),
+        //                0 = background (light color → white on white OLED).
+        // Parent's drawXBitmap(7-arg) maps:
+        //   1-bits → color arg → colorToInk(color).  For BLACK (0x0000, dark),
+        //            colorToInk returns SSD1306_WHITE (pixel ON = black on screen). ✓
+        //   0-bits → bg arg    → colorToBg(bg).       For WHITE (0xFFFF, light),
+        //            colorToBg returns SSD1306_BLACK (pixel OFF = white on screen). ✓
+        _parent->drawXBitmap(x, y, _canvas->getBuffer(), _cw, _ch, 0x0000, 0xFFFF);
+    }
+    void pushSprite(int16_t x, int16_t y, uint16_t /*transparent*/) {
+        pushSprite(x, y);
+    }
+
+    // ---- Geometry ----
+    int16_t width() const  { return _cw; }
+    int16_t height() const { return _ch; }
+
+    // ---- Primitives (route to the canvas, mapping color to 1-bit) ----
+    void drawPixel(int16_t x, int16_t y, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawPixel(x, y, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawFastVLine(x, y, h, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawFastHLine(x, y, w, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawLine(x0, y0, x1, y1, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawRect(x, y, w, h, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->fillRect(x, y, w, h, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void drawCircle(int16_t x, int16_t y, int16_t r, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawCircle(x, y, r, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void fillCircle(int16_t x, int16_t y, int16_t r, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->fillCircle(x, y, r, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void drawTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawTriangle(x0, y0, x1, y1, x2, y2, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->fillTriangle(x0, y0, x1, y1, x2, y2, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void fillScreen(uint16_t color) {
+        if (!_canvas) return;
+        _canvas->fillScreen(TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+
+    // ---- Text (cursor-based, using Adafruit_GFX's default font) ----
+    void setCursor(int16_t x, int16_t y) { _cursorX = x; _cursorY = y; if (_canvas) _canvas->setCursor(x, y); }
+    int16_t getCursorX() const { return _cursorX; }
+    int16_t getCursorY() const { return _cursorY; }
+    void setTextColor(uint16_t c) { _fgColor = c; _bgColor = c; if (_canvas) _canvas->setTextColor(TFT_eSPI::colorToInk(c) ? 1 : 0); }
+    void setTextColor(uint16_t c, uint16_t bg) { _fgColor = c; _bgColor = bg; if (_canvas) _canvas->setTextColor(TFT_eSPI::colorToInk(c) ? 1 : 0, TFT_eSPI::colorToInk(bg) ? 1 : 0); }
+    void setTextSize(uint8_t s) { _textSize = s; if (_canvas) _canvas->setTextSize(s); }
+    void setTextWrap(bool w) { if (_canvas) _canvas->setTextWrap(w); }
+    void setTextDatum(uint8_t d) { _textDatum = d; }
+    void setTextFont(uint8_t f) { _font = f; }
+    uint8_t getTextFont() const { return _font; }
+    int16_t textWidth(const char *str) { return _textSize * 6 * (int16_t)strlen(str); }
+    int16_t textWidth(const String &str) { return textWidth(str.c_str()); }
+    int16_t textWidth(const char *str, uint8_t) { return textWidth(str); }
+    int16_t fontHeight(int8_t = -1) { return _textSize * 8; }
+
+    void drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color, uint16_t bg, uint8_t size) {
+        if (!_canvas) return;
+        _canvas->drawChar(x, y, c, TFT_eSPI::colorToInk(color) ? 1 : 0, TFT_eSPI::colorToInk(bg) ? 1 : 0, size);
+    }
+    void drawString(const char *str, int16_t x, int16_t y) {
+        if (!_canvas) return;
+        _canvas->setCursor(x, y);
+        _canvas->setTextColor(TFT_eSPI::colorToInk(_fgColor) ? 1 : 0,
+                              TFT_eSPI::colorToInk(_bgColor) ? 1 : 0);
+        _canvas->setTextSize(_textSize);
+        while (*str) { _canvas->write((uint8_t)*str++); }
+    }
+    void drawString(const String &str, int16_t x, int16_t y) { drawString(str.c_str(), x, y); }
+    void drawString(const char *str, int16_t x, int16_t y, uint8_t) { drawString(str, x, y); }
+    void drawString(const String &str, int16_t x, int16_t y, uint8_t f) { drawString(str.c_str(), x, y, f); }
+    void drawCentreString(const char *str, int16_t x, int16_t y, uint8_t = 1) {
+        drawString(str, x - textWidth(str) / 2, y);
+    }
+    void drawRightString(const char *str, int16_t x, int16_t y, uint8_t = 1) {
+        drawString(str, x - textWidth(str), y);
+    }
+
+    // Print API (so sprite.print(...) works like on TFT_eSPI)
+    using Print::write;
+    size_t write(uint8_t c) override {
+        if (_canvas) _canvas->write(c);
+        return 1;
+    }
+    size_t write(const uint8_t *buf, size_t size) override {
+        if (_canvas) { for (size_t i = 0; i < size; i++) _canvas->write(buf[i]); }
+        return size;
+    }
+
+    // StartWrite/endWrite are no-ops on the canvas.
+    void startWrite() {}
+    void endWrite()   {}
+
+private:
+    TFT_eSPI *_parent;
+    bool      _created;
+    GFXcanvas1 *_canvas;
+    int16_t   _cw, _ch;
+    uint16_t  _fgColor, _bgColor;
+    uint8_t   _textSize;
+    uint8_t   _textDatum;
+    uint8_t   _font;
+    int16_t   _cursorX, _cursorY;
 };

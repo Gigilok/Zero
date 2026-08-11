@@ -389,6 +389,14 @@ public:
         if (!_canvas) return;
         _canvas->fillRect(x, y, w, h, TFT_eSPI::colorToInk(color) ? 1 : 0);
     }
+    void drawRoundRect(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->drawRoundRect(x, y, w, h, r, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
+    void fillRoundRect(int16_t x, int16_t y, int16_t w, int16_t h, int16_t r, uint16_t color) {
+        if (!_canvas) return;
+        _canvas->fillRoundRect(x, y, w, h, r, TFT_eSPI::colorToInk(color) ? 1 : 0);
+    }
     void drawCircle(int16_t x, int16_t y, int16_t r, uint16_t color) {
         if (!_canvas) return;
         _canvas->drawCircle(x, y, r, TFT_eSPI::colorToInk(color) ? 1 : 0);

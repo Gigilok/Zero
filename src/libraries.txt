@@ -1,0 +1,28 @@
+# Bibliotecas Arduino necessárias para o ESP32-DIV WROOM-OLED
+# Instale via Arduino IDE: Sketch > Include Library > Manage Libraries...
+# Ou via PlatformIO: pio lib install <nome>
+
+Adafruit SSD1306        # >= 2.5.0  — driver do OLED
+Adafruit GFX Library    # >= 1.11.0 — primitivas gráficas usadas pelo DisplayAdapter
+RF24                    # TMRh20    — rádio nRF24L01
+SmartRC-CC1101-Driver-Lib  #         — módulo CC1101 Sub-GHz
+RCSwitch                #           — replay/captura Sub-GHz
+arduinoFFT              #           — análise espectral
+NimBLE-Arduino          # h2zero    — stack BLE
+Adafruit PN532          #           — leitor RFID/NFC (opcional)
+IRremoteESP8266         #           — controle IR
+ArduinoJson             # >= 6.21   — persistência de configurações
+
+# Bibliotecas que NÃO devem ser instaladas (substituídas pelos adapters):
+# - TFT_eSPI             → DisplayAdapter.h
+# - PCF8574_library      → PCF8574Adapter.h
+# - XPT2046_Touchscreen  → XPT2046Adapter.h
+# - SD (já incluída no core ESP32)  → SDFlashAdapter.h (LittleFS)
+
+# Configuração da placa no Arduino IDE:
+# Board: "ESP32 Dev Module" (ou "DOIT ESP32 DEVKIT V1")
+# Upload Speed: 921600
+# CPU Frequency: 240 MHz
+# Flash Size: 4MB
+# Partition Scheme: "Default 4MB with spiffs (1.2MB APP / 1.5MB SPIFFS)"
+# PSRAM: Disabled

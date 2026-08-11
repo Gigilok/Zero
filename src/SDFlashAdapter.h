@@ -38,14 +38,14 @@ public:
     bool exists(const char *path);
     inline bool exists(const String &path) { return exists(path.c_str()); }
 
+    // NOTE: In the Arduino-ESP32 core, FILE_READ / FILE_WRITE / FILE_APPEND are
+    // defined in FS.h as string literals ("r", "w", "a"). They are therefore
+    // `const char*`, not integers — so the classic SD library `uint8_t mode`
+    // overload cannot be implemented here. All project call-sites already pass
+    // FILE_READ / FILE_WRITE / FILE_APPEND, which route to the `const char*`
+    // overload below.
     fs::File open(const char *path, const char *mode = FILE_READ);
     inline fs::File open(const String &path, const char *mode = FILE_READ) {
-        return open(path.c_str(), mode);
-    }
-    inline fs::File open(const char *path, uint8_t mode) {
-        return open(path, (const char *)(mode == FILE_WRITE ? "w" : "r"));
-    }
-    inline fs::File open(const String &path, uint8_t mode) {
         return open(path.c_str(), mode);
     }
 

@@ -4361,6 +4361,7 @@ void handleButtons() {
     // to the previous level. This gives the user a consistent "voltar" button
     // matching the 4-button hardware spec.
     if (isButtonPressed(BTN_LEFT)) {
+        buzzerBeep(1500, 60);   // lower-pitch beep for "back"
         if (feature_active && !feature_exit_requested) {
             // Inside a feature (scanner, replay, terminal, etc.) — request exit.
             // The feature's loop will see this flag and return control.
@@ -4399,6 +4400,7 @@ void handleButtons() {
     } else {
 
         if (isButtonPressed(BTN_UP) && !is_main_menu) {
+            buzzerClick();
             current_menu_index--;
             if (current_menu_index < 0) {
                 current_menu_index = NUM_MENU_ITEMS - 1;
@@ -4409,6 +4411,7 @@ void handleButtons() {
         }
 
         if (isButtonPressed(BTN_DOWN) && !is_main_menu) {
+            buzzerClick();
             current_menu_index++;
             if (current_menu_index >= NUM_MENU_ITEMS) {
                 current_menu_index = 0;
@@ -4447,6 +4450,7 @@ void handleButtons() {
         }
 
         if (isButtonPressed(BTN_SELECT)) {
+            buzzerBeep(2600, 80);   // higher-pitch beep for "select/enter"
             last_interaction_time = millis();
             delay(200);
 
@@ -4607,6 +4611,14 @@ void setup() {
 #endif
 
 #if defined(BOARD_ESP32_WROOM_OLED)
+  // Configure the GPIO 4 buzzer. After this, any feature can call buzzerBeep()
+  // or buzzerClick() to play a tone. buzzerPoll() in loop() silences it.
+  buzzerInit();
+  // Play a short boot beep so the user can confirm the buzzer works at startup.
+  buzzerBeep(1800, 120);
+#endif
+
+#if defined(BOARD_ESP32_WROOM_OLED)
   // Classic ESP32 WROOM has NimBLE-compatible BLE; bring it up like the S3 path.
   ensureBleStackReady();
   WifiScan::startBackgroundScanner();
@@ -4644,4 +4656,5 @@ void loop() {
   applyThemeToPalette(settings().theme);
   handleButtons();
   updateStatusBar();
+  buzzerPoll();   // auto-silence the buzzer after its beep duration expires
 }

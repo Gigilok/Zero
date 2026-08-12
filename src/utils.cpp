@@ -999,7 +999,7 @@ void buzzerPoll() {
 }
 
 void buzzerClick() {
-  buzzerBeep(2400, 30);
+  buzzerBeep(2400, 15);
 }
 #else
 // Non-OLED boards or no buzzer pin — no-op stubs.

@@ -157,7 +157,7 @@ static void bleSetSpooferNavLabels() {
 namespace BleSpoofer {
 
 #define SCREEN_HEIGHT 250
-#define LINE_HEIGHT 12
+#define LINE_HEIGHT ESP32DIV_LINE_HEIGHT
 #define MAX_LINES (SCREEN_HEIGHT / LINE_HEIGHT)
 
 String spooferBuffer[MAX_LINES];
@@ -1741,7 +1741,13 @@ namespace AirTagSniffer {
 static constexpr int HDR_Y = 42;
 static constexpr int COL_Y = 58;
 static constexpr int LIST_Y = 74;
+#if defined(BOARD_ESP32_WROOM_OLED)
+// OLED: ROW_H needs to be 50 source-px (= 10 OLED-px) to fit 8-px-tall text.
+// Original 18 source-px (= 3.6 OLED-px) caused heavy row overlap.
+static constexpr int ROW_H = 50;
+#else
 static constexpr int ROW_H = 18;
+#endif
 static constexpr int MAX_HITS = 32;
 static constexpr unsigned long BTN_DEBOUNCE_MS = 220;
 static constexpr unsigned long UI_MS = 250;
@@ -2338,7 +2344,15 @@ namespace BleSkimmer {
 
 static constexpr int HDR_Y = 40;
 static constexpr int LIST_Y = 58;
+#if defined(BOARD_ESP32_WROOM_OLED)
+// OLED: ROW_H needs to be 50 source-px (= 10 OLED-px) per text line. This
+// scanner uses a 2-line layout (name+RSSI on top, MAC below), so we need
+// 100 source-px per row. Original 32 source-px (= 6.4 OLED-px) caused the
+// two lines to overlap each other AND adjacent rows.
+static constexpr int ROW_H = 100;
+#else
 static constexpr int ROW_H = 32;
+#endif
 static constexpr int MAX_HITS = 32;
 static constexpr int NAME_LEN = 18;
 static constexpr int LABEL_LEN = 12;
@@ -3139,7 +3153,7 @@ byte channelGroup2[] = {26, 29, 32, 35};
 byte channelGroup3[] = {80, 83, 86, 89};
 
 #define SCREEN_HEIGHT 320
-#define LINE_HEIGHT 12
+#define LINE_HEIGHT ESP32DIV_LINE_HEIGHT
 #define MAX_LINES (SCREEN_HEIGHT / LINE_HEIGHT)
 
 String Buffer[MAX_LINES];
@@ -3368,7 +3382,12 @@ void blejamSetup() {
 
 void blejamLoop() {
 
-  if (feature_active && isButtonPressed(BTN_SELECT)) {
+  // On BOARD_ESP32_WROOM_OLED the user has a dedicated BACK button (BTN_LEFT,
+  // black wire). featureExitButtonPressed() returns true when EITHER BTN_LEFT
+  // or BTN_SELECT is held — so this single check covers both "press BACK to
+  // exit" and the legacy "press SELECT to exit" behavior. Without this, the
+  // user reported BACK did nothing in the BLE jammer screen.
+  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
     feature_exit_requested = true;
     return;
   }
@@ -3428,9 +3447,9 @@ bool fullScreenUpdate = true;
 static constexpr int yshift = 30;
 
 // Deauther-like list geometry (bigger rows + paging + bottom nav/tab bar).
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 static int current_page = 0;
 
 static int bleListBottomY() {
@@ -3691,12 +3710,39 @@ void updateBLEList() {
     tft.fillRect(0, y, SCREEN_WIDTH, LIST_ROW_H, TFT_BLACK);
     BLEAdvertisedDevice device = bleResults.getDevice(idx);
     String name = device.getName().length() > 0 ? device.getName().c_str() : "Unknown";
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // OLED: truncate to ~14 chars so name + RSSI fit on one 128-px line.
+    if (name.length() > 14) name = name.substring(0, 11) + "...";
+    // Fetch RSSI for inline display (saves a separate row).
+    String rssiStr = String(device.getRSSI()) + "dB";
+    // Right-align RSSI string within the visible width.
+    const int nameW = tft.textWidth(name);
+    const int rssiW = tft.textWidth(rssiStr);
+    const int maxX = 230;  // right margin in source space (240 - 10)
+    if (nameW + rssiW + 16 < maxX - 10) {
+      // Both fit on one line — draw name at left, RSSI at right.
+      tft.setCursor(10, y);
+      tft.setTextColor(selected ? ORANGE : WHITE);
+      tft.print(selected ? "> " : "  ");
+      tft.println(name);
+      tft.setTextColor(selected ? ORANGE : UI_DIM_TEXT);
+      tft.setCursor(maxX - rssiW, y);
+      tft.print(rssiStr);
+    } else {
+      // Name too long — drop RSSI to avoid overlap.
+      tft.setCursor(10, y);
+      tft.setTextColor(selected ? ORANGE : WHITE);
+      tft.print(selected ? "> " : "  ");
+      tft.println(name);
+    }
+#else
     if (name.length() > 22) name = name.substring(0, 22) + "...";
 
     tft.setCursor(10, y);
     tft.setTextColor(selected ? ORANGE : WHITE);
     tft.print(selected ? "> " : "  ");
     tft.println(name);
+#endif
   };
 
   const bool pageChanged = (current_page != last_rendered_page);
@@ -3974,7 +4020,12 @@ void bleScanSetup() {
 
 void bleScanLoop() {
 
-  if (feature_active && isButtonPressed(BTN_SELECT)) {
+  // On BOARD_ESP32_WROOM_OLED the user has a dedicated BACK button (BTN_LEFT,
+  // black wire). featureExitButtonPressed() returns true when EITHER BTN_LEFT
+  // or BTN_SELECT is held — so this single check covers both "press BACK to
+  // exit" and the legacy "press SELECT to exit" behavior. Without this, the
+  // user reported BACK did nothing in the BLE scanner screen.
+  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
     feature_exit_requested = true;
     return;
   }
@@ -4083,7 +4134,7 @@ static constexpr int kScannerLogStartY = kScannerLogBoxTop + kScannerBoxHeaderH;
 static constexpr int kScannerLogEndY = kScannerLogBoxTop + kScannerLogBoxH - 2;
 
 #define SCREEN_HEIGHT 180
-#define LINE_HEIGHT 12
+#define LINE_HEIGHT ESP32DIV_LINE_HEIGHT
 #define MAX_LINES (SCREEN_HEIGHT / LINE_HEIGHT)
 
 String Buffer[MAX_LINES];
@@ -5020,7 +5071,7 @@ byte channelGroup2[] = {26, 29, 32, 35};
 byte channelGroup3[] = {80, 83, 86, 89};
 
 #define SCREEN_HEIGHT 320
-#define LINE_HEIGHT 12
+#define LINE_HEIGHT ESP32DIV_LINE_HEIGHT
 #define MAX_LINES (SCREEN_HEIGHT / LINE_HEIGHT)
 
 String Buffer[MAX_LINES];

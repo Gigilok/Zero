@@ -1052,7 +1052,8 @@ void do_sampling() {
   constexpr int kOledGraphTop    = 20;
   constexpr int kOledGraphH      = 40;  // y=20..59
   constexpr int kOledGraphW      = 128;
-  constexpr int kOledThreshold   = 32;  // magnitude threshold for 1-bit ON
+  // Lower threshold so weak SubGHz signals still show up on the graph.
+  constexpr int kOledThreshold   = 8;
 
   static uint8_t s_fftBuf[kOledGraphH][kOledGraphW / 8];  // 640 bytes
   static int     s_fftWriteIdx = 0;
@@ -1128,6 +1129,22 @@ void do_sampling() {
         oled->drawPixel(x, oledY, SSD1306_WHITE);
       }
     }
+  }
+
+  // ---- Info header at y=8..18 — show frequency + RSSI so the user can see
+  // the analyzer is actually running (not a frozen screen).
+  {
+    char info[24];
+    const int rssi = ELECHOUSE_cc1101.getRssi();
+    // Frequency in MHz comes from the cc1101 driver. We don't have a direct
+    // accessor here, so we print RSSI only; the channel is shown on the TFT
+    // status bar above (drawn by the runUI / status bar code).
+    snprintf(info, sizeof(info), "RSSI:%d  SUB:SCAN", rssi);
+    oled->fillRect(0, 8, kOledGraphW, 11, SSD1306_BLACK);
+    oled->setTextSize(1);
+    oled->setTextColor(SSD1306_WHITE);
+    oled->setCursor(0, 9);
+    oled->print(info);
   }
   // Single I2C transfer for the whole frame.
   oled->display();

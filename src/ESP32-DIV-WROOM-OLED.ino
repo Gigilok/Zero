@@ -4607,7 +4607,7 @@ void handleButtons() {
     // to the previous level. This gives the user a consistent "voltar" button
     // matching the 4-button hardware spec.
     if (isButtonPressed(BTN_LEFT)) {
-        buzzerBeep(1500, 20);   // short lower-pitch beep for "back"
+        buzzerBeep(1800, 15);   // short back beep — one crisp bip per key press
         if (feature_active && !feature_exit_requested) {
             // Inside a feature (scanner, replay, terminal, etc.) — request exit.
             // The feature's loop will see this flag and return control.
@@ -4696,7 +4696,7 @@ void handleButtons() {
         }
 
         if (isButtonPressed(BTN_SELECT)) {
-            buzzerBeep(2600, 25);   // short higher-pitch beep for "select/enter"
+            buzzerBeep(2600, 20);   // short select beep — one crisp bip per key press
             last_interaction_time = millis();
             delay(200);
 

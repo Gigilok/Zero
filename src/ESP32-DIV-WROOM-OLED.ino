@@ -838,11 +838,57 @@ unsigned long last_interaction_time = 0;
 int last_menu_index = -1;
 bool menu_initialized = false;
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+// OLED-tuned "Other" grid layout (2x2). The TFT defaults (100x60 source-px
+// tiles, 75 source-px row spacing) shrink to 53x12 OLED px tiles — far too
+// small to fit a 16x16 icon + 8-px-tall text label without overlap.
+//
+// On the 128x64 OLED (after sx/sy scaling: 1 OLED-px X = 1.875 source-px,
+// 1 OLED-px Y = 5 source-px), we use:
+//   * Tile:    105x140 source-px  =  56x28 OLED px (2 cols, 2 rows)
+//   * Icon:    16x16 source-px    =  8x3 OLED px (centered horizontally)
+//   * Label:   8 px tall (size=1), centered horizontally, 12 OLED px from
+//              top of tile (just below the icon)
+//   * Total:   2 rows × 30 OLED px = 60 OLED px (fits below 4-px status bar)
+//   * Total:   2 cols × 60 OLED px + 8 px gap = 128 OLED px (exactly screen)
+//
+// The main menu (4 rows × 2 cols) keeps the TFT defaults: 100x60 source-px
+// tiles with 75 source-px row spacing = 15 OLED px per row × 4 = 60 OLED px.
+// It renders acceptably because each tile only needs to fit a 3-px icon AND
+// 8-px text in 12 px (text overflows tile by 2 px but no row overlap).
+const int COLUMN_WIDTH       = 120;  // main menu column width (TFT default)
+const int X_OFFSET_LEFT      = 10;   // main menu left offset (TFT default)
+const int X_OFFSET_RIGHT     = X_OFFSET_LEFT + COLUMN_WIDTH;
+const int Y_START            = 30;   // main menu first row y (TFT default)
+const int Y_SPACING          = 75;   // main menu row spacing (TFT default)
+// Other-grid-specific layout (2x2 only — bigger tiles, double row spacing).
+const int OTHER_X_OFFSET_L   = 6;
+const int OTHER_X_OFFSET_R   = 67;   // 6 + 56 + 5 = 67 → tile ends at 67+56=123 OLED px (within 128)
+const int OTHER_Y_START      = 25;   // 5 OLED px below status bar
+const int OTHER_Y_SPACING    = 150;  // 30 OLED px between rows
+const int OTHER_TILE_W       = 105;  // 56 OLED px wide
+const int OTHER_TILE_H       = 140;  // 28 OLED px tall
+const int OTHER_TILE_R       = 8;
+const int OTHER_ICON_DX      = (OTHER_TILE_W - 16) / 2;  // center icon in tile
+const int OTHER_ICON_DY      = 15;                        // 15 source-px from top (= 3 OLED px)
+const int OTHER_LABEL_DY     = 60;                        // 60 source-px from top (= 12 OLED px)
+#else
 const int COLUMN_WIDTH = 120;
 const int X_OFFSET_LEFT = 10;
 const int X_OFFSET_RIGHT = X_OFFSET_LEFT + COLUMN_WIDTH;
 const int Y_START = 30;
 const int Y_SPACING = 75;
+const int OTHER_X_OFFSET_L = X_OFFSET_LEFT;
+const int OTHER_X_OFFSET_R = X_OFFSET_RIGHT;
+const int OTHER_Y_START    = Y_START;
+const int OTHER_Y_SPACING  = Y_SPACING;
+const int OTHER_TILE_W   = 100;
+const int OTHER_TILE_H   = 60;
+const int OTHER_TILE_R   = 5;
+const int OTHER_ICON_DX  = 42;
+const int OTHER_ICON_DY  = 10;
+const int OTHER_LABEL_DY = 30;
+#endif
 
 void displayOtherMenuGrid();
 void displayPagedSubmenu();
@@ -855,19 +901,24 @@ void displayPagedSubmenu();
 // font at size=1, causing heavy overlap ("embaralhado").
 //
 // OLED-aware layout:
-//   * 60 source-px per row = 12 OLED px per row (8 px font + 4 px gap)
-//   * Top margin 30 source-px = 6 OLED px (below status bar)
-//   * 4 selectable rows visible at once (48 OLED px)
-//   * "Back" item pinned to bottom row (y = TFT_HEIGHT - 30)
+//   * Status bar takes 20 source-px (4 OLED px) at the top.
+//   * 50 source-px per row = 10 OLED px per row (8 px font + 2 px gap).
+//   * Top margin 30 source-px = 6 OLED px (2 px below status bar).
+//   * 4 selectable rows visible at once = 40 OLED px (y=6..46).
+//   * "Back" item at y=230 source-px = 46 OLED px — text ends at y=54,
+//     fully visible (OLED is 64 px tall, leaving 10 px bottom margin).
+//   * fillRect height for row redraw = 50 source-px (= 10 OLED px) so the
+//     previous row's 8-px-tall text is fully erased before drawing the new
+//     selection — no more bleed-through / overlap.
 //   * When selectable items exceed 4, a vertical scrollbar is drawn on the
 //     right edge (3 px wide) and the window scrolls to keep the highlighted
 //     item visible.
 // =============================================================================
 #if defined(BOARD_ESP32_WROOM_OLED)
-    constexpr int OLED_SUB_ROW_H     = 60;   // source-px per row (= 12 OLED px)
-    constexpr int OLED_SUB_TOP_Y     = 30;   // first row y in source px
+    constexpr int OLED_SUB_ROW_H     = 50;   // source-px per row (= 10 OLED px)
+    constexpr int OLED_SUB_TOP_Y     = 30;   // first row y in source px (= 6 OLED px)
     constexpr int OLED_SUB_VISIBLE   = 4;    // selectable rows visible at once
-    constexpr int OLED_SUB_BACK_Y    = TFT_HEIGHT - 30;  // bottom-pinned "Back"
+    constexpr int OLED_SUB_BACK_Y    = 230;  // bottom-pinned "Back" (= 46 OLED px)
     // Scrollbar geometry (source space). On OLED, 3 source-px ≈ 1 OLED px —
     // too thin to see. Use 6 source-px width (= 3 OLED px) and a 12 source-px
     // (= 3 OLED px) minimum indicator height so the bar is clearly visible.
@@ -997,7 +1048,7 @@ void displaySubmenu() {
             const int new_yPos = submenuItemY(current_submenu_index);
             const bool newBack = (current_submenu_index == active_submenu_size - 1);
             if (new_yPos >= 0) {
-                tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+                tft.fillRect(0, new_yPos, tft.width(), OLED_SUB_ROW_H, UI_BG);
                 tft.setTextColor(UI_ICON, UI_BG);
                 tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
                 tft.setCursor(30, new_yPos);
@@ -1020,7 +1071,7 @@ void displaySubmenu() {
             const int prev_yPos = submenuItemY(last_submenu_index);
             const bool prevBack = (last_submenu_index == active_submenu_size - 1);
             if (prev_yPos >= 0) {
-                tft.fillRect(0, prev_yPos, tft.width(), 28, UI_BG);
+                tft.fillRect(0, prev_yPos, tft.width(), OLED_SUB_ROW_H, UI_BG);
                 tft.setTextColor(UI_TEXT, UI_BG);
                 tft.drawBitmap(10, prev_yPos, active_submenu_icons[last_submenu_index], 16, 16, UI_TEXT);
                 tft.setCursor(30, prev_yPos);
@@ -1035,7 +1086,7 @@ void displaySubmenu() {
         const bool newBack = (current_submenu_index == active_submenu_size - 1);
 
         if (new_yPos >= 0) {
-            tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+            tft.fillRect(0, new_yPos, tft.width(), OLED_SUB_ROW_H, UI_BG);
             tft.setTextColor(UI_ICON, UI_BG);
             tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
             tft.setCursor(30, new_yPos);
@@ -1124,7 +1175,7 @@ void displayPagedSubmenu() {
         if (current_submenu_index >= 0 && current_submenu_index < featureCount) {
             const int new_yPos = pagedSubmenuItemY(current_submenu_index);
             if (new_yPos >= 0) {
-                tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+                tft.fillRect(0, new_yPos, tft.width(), OLED_SUB_ROW_H, UI_BG);
                 tft.setTextColor(UI_ICON, UI_BG);
                 tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
                 tft.setCursor(30, new_yPos);
@@ -1156,7 +1207,7 @@ void displayPagedSubmenu() {
         if (current_submenu_index >= 0 && current_submenu_index < featureCount) {
             const int new_yPos = pagedSubmenuItemY(current_submenu_index);
             if (new_yPos >= 0) {
-                tft.fillRect(0, new_yPos, tft.width(), 28, UI_BG);
+                tft.fillRect(0, new_yPos, tft.width(), OLED_SUB_ROW_H, UI_BG);
                 tft.setTextColor(UI_ICON, UI_BG);
                 tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
                 tft.setCursor(30, new_yPos);
@@ -1195,17 +1246,17 @@ void displayOtherMenuGrid() {
         for (int i = 0; i < other_NUM_SUBMENU_ITEMS; i++) {
             int column = i % OTHER_GRID_COLS;
             int row = i / OTHER_GRID_COLS;
-            int x_position = (column == 0) ? X_OFFSET_LEFT : X_OFFSET_RIGHT;
-            int y_position = Y_START + row * Y_SPACING;
+            int x_position = (column == 0) ? OTHER_X_OFFSET_L : OTHER_X_OFFSET_R;
+            int y_position = OTHER_Y_START + row * OTHER_Y_SPACING;
 
-            tft.fillRoundRect(x_position, y_position, 100, 60, 5, UI_FG);
-            tft.drawRoundRect(x_position, y_position, 100, 60, 5, UI_LINE);
-            tft.drawBitmap(x_position + 42, y_position + 10, other_submenu_icons[i], 16, 16, UI_ICON);
+            tft.fillRoundRect(x_position, y_position, OTHER_TILE_W, OTHER_TILE_H, OTHER_TILE_R, UI_FG);
+            tft.drawRoundRect(x_position, y_position, OTHER_TILE_W, OTHER_TILE_H, OTHER_TILE_R, UI_LINE);
+            tft.drawBitmap(x_position + OTHER_ICON_DX, y_position + OTHER_ICON_DY, other_submenu_icons[i], 16, 16, UI_ICON);
 
             tft.setTextColor(UI_TEXT, UI_FG);
             int textWidth = tft.textWidth(other_submenu_items[i]);
-            int textX = x_position + (100 - textWidth) / 2;
-            int textY = y_position + 30;
+            int textX = x_position + (OTHER_TILE_W - textWidth) / 2;
+            int textY = y_position + OTHER_LABEL_DY;
             tft.setCursor(textX, textY);
             tft.print(other_submenu_items[i]);
         }
@@ -1218,18 +1269,18 @@ void displayOtherMenuGrid() {
         for (int i = 0; i < other_NUM_SUBMENU_ITEMS; i++) {
             int column = i % OTHER_GRID_COLS;
             int row = i / OTHER_GRID_COLS;
-            int x_position = (column == 0) ? X_OFFSET_LEFT : X_OFFSET_RIGHT;
-            int y_position = Y_START + row * Y_SPACING;
+            int x_position = (column == 0) ? OTHER_X_OFFSET_L : OTHER_X_OFFSET_R;
+            int y_position = OTHER_Y_START + row * OTHER_Y_SPACING;
 
             if (i == last_other_menu_index) {
-                tft.fillRoundRect(x_position, y_position, 100, 60, 5, UI_FG);
-                tft.drawRoundRect(x_position, y_position, 100, 60, 5, UI_LINE);
+                tft.fillRoundRect(x_position, y_position, OTHER_TILE_W, OTHER_TILE_H, OTHER_TILE_R, UI_FG);
+                tft.drawRoundRect(x_position, y_position, OTHER_TILE_W, OTHER_TILE_H, OTHER_TILE_R, UI_LINE);
                 tft.setTextColor(UI_TEXT, UI_FG);
-                tft.drawBitmap(x_position + 42, y_position + 10,
+                tft.drawBitmap(x_position + OTHER_ICON_DX, y_position + OTHER_ICON_DY,
                                other_submenu_icons[last_other_menu_index], 16, 16, UI_ICON);
                 int textWidth = tft.textWidth(other_submenu_items[last_other_menu_index]);
-                int textX = x_position + (100 - textWidth) / 2;
-                int textY = y_position + 30;
+                int textX = x_position + (OTHER_TILE_W - textWidth) / 2;
+                int textY = y_position + OTHER_LABEL_DY;
                 tft.setCursor(textX, textY);
                 tft.print(other_submenu_items[last_other_menu_index]);
             }
@@ -1237,18 +1288,18 @@ void displayOtherMenuGrid() {
 
         int column = current_submenu_index % OTHER_GRID_COLS;
         int row = current_submenu_index / OTHER_GRID_COLS;
-        int x_position = (column == 0) ? X_OFFSET_LEFT : X_OFFSET_RIGHT;
-        int y_position = Y_START + row * Y_SPACING;
+        int x_position = (column == 0) ? OTHER_X_OFFSET_L : OTHER_X_OFFSET_R;
+        int y_position = OTHER_Y_START + row * OTHER_Y_SPACING;
 
-        tft.fillRoundRect(x_position, y_position, 100, 60, 5, UI_FG);
-        tft.drawRoundRect(x_position, y_position, 100, 60, 5, UI_ICON);
+        tft.fillRoundRect(x_position, y_position, OTHER_TILE_W, OTHER_TILE_H, OTHER_TILE_R, UI_FG);
+        tft.drawRoundRect(x_position, y_position, OTHER_TILE_W, OTHER_TILE_H, OTHER_TILE_R, UI_ICON);
 
         tft.setTextColor(UI_ICON, UI_FG);
-        tft.drawBitmap(x_position + 42, y_position + 10, other_submenu_icons[current_submenu_index],
+        tft.drawBitmap(x_position + OTHER_ICON_DX, y_position + OTHER_ICON_DY, other_submenu_icons[current_submenu_index],
                        16, 16, SELECTED_ICON_COLOR);
         int textWidth = tft.textWidth(other_submenu_items[current_submenu_index]);
-        int textX = x_position + (100 - textWidth) / 2;
-        int textY = y_position + 30;
+        int textX = x_position + (OTHER_TILE_W - textWidth) / 2;
+        int textY = y_position + OTHER_LABEL_DY;
         tft.setCursor(textX, textY);
         tft.print(other_submenu_items[current_submenu_index]);
 
@@ -4556,7 +4607,7 @@ void handleButtons() {
     // to the previous level. This gives the user a consistent "voltar" button
     // matching the 4-button hardware spec.
     if (isButtonPressed(BTN_LEFT)) {
-        buzzerBeep(1500, 60);   // lower-pitch beep for "back"
+        buzzerBeep(1500, 20);   // short lower-pitch beep for "back"
         if (feature_active && !feature_exit_requested) {
             // Inside a feature (scanner, replay, terminal, etc.) — request exit.
             // The feature's loop will see this flag and return control.
@@ -4645,7 +4696,7 @@ void handleButtons() {
         }
 
         if (isButtonPressed(BTN_SELECT)) {
-            buzzerBeep(2600, 80);   // higher-pitch beep for "select/enter"
+            buzzerBeep(2600, 25);   // short higher-pitch beep for "select/enter"
             last_interaction_time = millis();
             delay(200);
 
@@ -4810,7 +4861,7 @@ void setup() {
   // or buzzerClick() to play a tone. buzzerPoll() in loop() silences it.
   buzzerInit();
   // Play a short boot beep so the user can confirm the buzzer works at startup.
-  buzzerBeep(1800, 120);
+  buzzerBeep(1800, 40);
 #endif
 
 #if defined(BOARD_ESP32_WROOM_OLED)

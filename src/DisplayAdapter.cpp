@@ -195,71 +195,6 @@ void TFT_eSPI::fillScreen(uint16_t color) {
     flush();
 }
 
-// ---------- Software vertical scroll ----------
-// Shifts the SSD1306 framebuffer up by `pixelRows` rows. The bottom `pixelRows`
-// rows are cleared. Implementation uses Adafruit_SSD1306::getBuffer() which
-// exposes the 1024-byte framebuffer (128 cols × 8 pages, each page = 8 vertical
-// pixels, LSB at top).
-//
-// For full-page shifts (pixelRows % 8 == 0): trivial memmove of whole pages.
-// For sub-page shifts: bit-shift each byte, pulling bits from the next page.
-//
-// Background color for the cleared rows = current "dark" mapping (SSD1306_BLACK
-// in our BLACK-background theme). We use SSD1306_BLACK explicitly since the
-// OLED theme is fixed black-bg after Task 12.
-void TFT_eSPI::scrollUp(uint8_t pixelRows) {
-    if (!_oled || pixelRows == 0) return;
-    if (pixelRows >= OLED_SCREEN_HEIGHT) {
-        // Scroll everything off — just clear.
-        _oled->fillScreen(SSD1306_BLACK);
-        flush();
-        return;
-    }
-
-    uint8_t *buf = _oled->getBuffer();
-    if (!buf) return;
-    const int PAGES = OLED_SCREEN_HEIGHT / 8;   // 8 pages
-    const int COLS  = OLED_SCREEN_WIDTH;        // 128 cols
-    const int pageShift = pixelRows / 8;
-    const int bitShift  = pixelRows & 7;
-
-    if (bitShift == 0) {
-        // Whole-page shift: simple memmove.
-        const int movePages = PAGES - pageShift;
-        if (movePages > 0) {
-            memmove(buf, buf + pageShift * COLS, (size_t)movePages * COLS);
-        }
-        // Zero the freed pages at the bottom.
-        memset(buf + movePages * COLS, 0, (size_t)pageShift * COLS);
-    } else {
-        // Sub-page shift: combine bits from current and next page.
-        // For each output page p (0..PAGES-1-pageShift), each column c:
-        //   buf[p][c] = (buf[p+pageShift][c] >> bitShift)
-        //             | (buf[p+pageShift+1][c] << (8 - bitShift))
-        // (with the last source page providing 0 for the high bits.)
-        for (int p = 0; p < PAGES - pageShift; ++p) {
-            const int srcIdxLo = (p + pageShift)     * COLS;
-            const int srcIdxHi = (p + pageShift + 1) * COLS;
-            for (int c = 0; c < COLS; ++c) {
-                uint8_t lo = buf[srcIdxLo + c] >> bitShift;
-                uint8_t hi = 0;
-                if (p + pageShift + 1 < PAGES) {
-                    hi = buf[srcIdxHi + c] << (8 - bitShift);
-                }
-                buf[p * COLS + c] = lo | hi;
-            }
-        }
-        // Zero the freed bottom pages.
-        const int freedPages = pageShift + 1;
-        const int startClear = PAGES - freedPages;
-        if (startClear < PAGES) {
-            memset(buf + startClear * COLS, 0,
-                   (size_t)(PAGES - startClear) * COLS);
-        }
-    }
-    flush();
-}
-
 // ---------- Bitmaps ----------
 void TFT_eSPI::drawBitmap(int16_t x, int16_t y, const uint8_t *bitmap,
                           int16_t w, int16_t h, uint16_t color) {
@@ -394,33 +329,40 @@ void TFT_eSPI::setTextFont(uint8_t f) {
 
 int16_t TFT_eSPI::textWidth(const char *str) {
     if (!str) return 0;
-    // Adafruit_GFX default font at OLED size=2: 12px per char (6px * size 2).
-    // Map back to original 240x320 coordinate space so the project's layout
-    // math (e.g. centering, right-alignment) places strings correctly.
-    int16_t perCharOled = 6 * scaledTextSize();
-    int16_t perCharOrig = (int16_t)((int32_t)perCharOled * TFT_WIDTH / OLED_SCREEN_WIDTH);
-    return (int16_t)strlen(str) * perCharOrig;
+    // Adafruit_GFX default font: 5px per char + 1px spacing, scaled by text size.
+    // We approximate original TFT_eSPI font widths:
+    //   font 1 -> 6px/char; font 2 -> 12px/char; font 4 -> 16px/char.
+    int16_t perChar;
+    switch (_font) {
+        case 2:  perChar = 12; break;
+        case 4:  perChar = 16; break;
+        case 6:  perChar = 14; break;
+        case 7:  perChar = 16; break;
+        case 8:  perChar = 18; break;
+        default: perChar = 6;  break;
+    }
+    return (int16_t)strlen(str) * perChar * (_textSize ? _textSize : 1);
 }
 
 int16_t TFT_eSPI::fontHeight(int8_t /*font*/) {
-    // 8px (Adafruit_GFX default) * OLED text size, mapped back to original
-    // 240x320 space so the project's row-height calculations match what we
-    // actually render on the OLED.
-    int16_t hOled = 8 * scaledTextSize();
-    return (int16_t)((int32_t)hOled * TFT_HEIGHT / OLED_SCREEN_HEIGHT);
+    switch (_font) {
+        case 2:  return 16 * (_textSize ? _textSize : 1);
+        case 4:  return 20 * (_textSize ? _textSize : 1);
+        case 6:  return 14 * (_textSize ? _textSize : 1);
+        case 7:  return 18 * (_textSize ? _textSize : 1);
+        case 8:  return 22 * (_textSize ? _textSize : 1);
+        default: return 8  * (_textSize ? _textSize : 1);
+    }
 }
 
 size_t TFT_eSPI::write(uint8_t c) {
     if (!_oled) return 1;
-    // Render text directly in OLED pixel space (NOT scaled). The 240x320 layout
-    // positions the cursor via sx()/sy() but the glyph itself is drawn at OLED
-    // size=2 (10-12px). This avoids the "embaralhado" effect where text was
-    // rendered at size=1 (5x7px) and overlapped because the cursor advance
-    // (in 240x320 space) didn't match the glyph width.
     int16_t ox = sx(_cursorX), oy = sy(_cursorY);
     uint8_t  ts = scaledTextSize();
     uint16_t fg = colorToInk(_fgColor);
     uint16_t bg = (_bgColor == _fgColor) ? fg : colorToBg(_bgColor);
+    // Adafruit_GFX drawChar advances cursor internally — but we manage cursor
+    // ourselves in original space so rendering stays consistent.
     _oled->setCursor(ox, oy);
     _oled->setTextSize(ts);
     _oled->setTextColor(fg, bg);
@@ -428,11 +370,9 @@ size_t TFT_eSPI::write(uint8_t c) {
     _oled->write(c);
     flush();
 
-    // Advance cursor in OLED space by the actual glyph width (6 * ts), then
-    // map back to original 240x320 space so the project's coordinate system
-    // stays consistent. This keeps characters from overlapping.
-    int16_t advanceOled = 6 * ts;
-    _cursorX += (int16_t)((int32_t)advanceOled * TFT_WIDTH / OLED_SCREEN_WIDTH);
+    // Advance cursor in ORIGINAL coordinate space (so subsequent print()s chain).
+    // Approximate char advance: 6 * textSize (matches Adafruit_GFX default).
+    _cursorX += 6 * (_textSize ? _textSize : 1);
     return 1;
 }
 
@@ -456,20 +396,6 @@ void TFT_eSPI::drawChar(int16_t x, int16_t y, unsigned char c,
     if (!_oled) return;
     _oled->drawChar(sx(x), sy(y), c, colorToInk(color), colorToBg(bg), size);
     flush();
-}
-
-// 4-arg overload: draws a single char using current text color/size and
-// returns the character's advance width in original 240x320 coordinate space
-// (so the caller can do `xPos += tft.drawChar(c, xPos, y, 2);`).
-int16_t TFT_eSPI::drawChar(unsigned char c, int16_t x, int16_t y, uint8_t size) {
-    if (!_oled) return 0;
-    // Use current text colors as foreground/background
-    _oled->drawChar(sx(x), sy(y), c,
-                    colorToInk(_fgColor), colorToBg(_bgColor),
-                    scaledTextSize());
-    flush();
-    // Adafruit_GFX default font is 5x7 at size 1; advance width is 6px per char.
-    return 6 * (size > 0 ? size : 1);
 }
 
 void TFT_eSPI::drawString(const char *str, int16_t x, int16_t y) {

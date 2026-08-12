@@ -789,19 +789,33 @@ bool isButtonPressedEdge(int buttonPin) {
 }
 
 bool featureExitButtonPressed() {
-  // On BOARD_ESP32_WROOM_OLED the user has 4 buttons:
-  //   BTN_UP (GPIO 5), BTN_DOWN (GPIO 27), BTN_SELECT (GPIO 32), BTN_LEFT (GPIO 33).
-  // The black-wired button (BTN_LEFT) is the dedicated BACK / EXIT button.
-  // SELECT is used to OPEN details / activate rows inside scanners, so it
-  // must NOT be interpreted as an exit request on this board — otherwise
-  // every "open details" press would also exit the scanner.
 #if defined(BOARD_ESP32_WROOM_OLED)
-  return isPhysicalButtonPressed(BTN_LEFT) || isTouchNavButtonPressed(BTN_LEFT);
+  // On the OLED board the user has 4 dedicated buttons:
+  //   BTN_UP (GPIO 5), BTN_DOWN (GPIO 27), BTN_SELECT (GPIO 32), BTN_LEFT (GPIO 33).
+  // BTN_LEFT (black wire) is the dedicated BACK / EXIT button.
+  // BTN_SELECT must NOT exit features — it is used to ENTER features from the
+  // submenu, and many feature loops also use SELECT for in-feature actions
+  // (toggle attack, open details, rescan, etc.). If SELECT also exited, the
+  // entry press (still held for ~200 ms) would trigger an immediate exit,
+  // making every feature appear "empty" / non-functional.
+  return isPhysicalButtonPressed(BTN_LEFT);
 #else
-  // Other boards: long-pressing SELECT also exits a feature (legacy behavior).
+  // Legacy TFT boards: BTN_SELECT long-press also exits (no dedicated BACK button).
   return isPhysicalButtonPressed(BTN_LEFT) || isTouchNavButtonPressed(BTN_LEFT) ||
          isPhysicalButtonPressed(BTN_SELECT) || isTouchNavButtonPressed(BTN_SELECT);
 #endif
+}
+
+// Wait for the SELECT button to be fully released.
+// Called after detecting a SELECT press in a submenu handler, BEFORE entering
+// a feature loop. Without this, the entry press (held for ~200 ms by the user)
+// would be detected by the feature's first internal isButtonPressed(BTN_SELECT)
+// check — triggering an unintended in-feature action (e.g., toggle attack,
+// open details) immediately on entry.
+static inline void waitForSelectRelease() {
+    while (isButtonPressed(BTN_SELECT)) {
+        delay(10);
+    }
 }
 
 static void showFeatureUnavailable(const char* featureName, const char* requirement) {
@@ -935,6 +949,31 @@ void displayPagedSubmenu();
     static int g_subScrollOffset = 0;  // index of first visible selectable item
     static int g_subPrevScrollOffset = -1;  // for change detection
 
+    // Max chars of an item name that fit on one OLED line without wrapping.
+    // Text starts at source-x=30 (= 16 OLED px). Scrollbar is at source-x=231
+    // (= 123 OLED px). Available text width = 123-16 = 107 OLED px.
+    // At 6 px per char (Adafruit_GFX size=1), that's 17 chars total.
+    // Non-back items have a "| " prefix (2 chars = 12 px), leaving 15 chars
+    // for the item name. Back items have no prefix, so 17 chars.
+    constexpr int OLED_SUB_MAX_CHARS = 15;
+
+    // Truncate a menu item name to OLED_SUB_MAX_CHARS characters, adding ".."
+    // if truncated. Uses a static internal buffer (overwritten each call —
+    // safe because the result is consumed immediately by tft.print()).
+    static const char* oledTruncateItem(const char* item) {
+        static char buf[32];
+        if (!item) return "";
+        size_t len = strlen(item);
+        if ((int)len <= OLED_SUB_MAX_CHARS) return item;
+        int keep = OLED_SUB_MAX_CHARS - 2;  // leave room for ".."
+        if (keep < 1) keep = 1;
+        memcpy(buf, item, keep);
+        buf[keep]     = '.';
+        buf[keep + 1] = '.';
+        buf[keep + 2] = '\0';
+        return buf;
+    }
+
     // Returns Y (source space) for item `index`, or -1 if scrolled off-screen.
     // The last item ("Back") is always pinned to the bottom row.
     static int submenuItemY(int index) {
@@ -1020,8 +1059,9 @@ void displaySubmenu() {
 
     tft.setTextFont(2);
     tft.setTextSize(1);
-
-    // Keep the highlighted item within the visible scroll window. On non-OLED
+#if defined(BOARD_ESP32_WROOM_OLED)
+    tft.setTextWrap(false);  // prevent long names from wrapping to next row
+#endif
     // boards this is a no-op (full list always visible).
     submenuEnsureVisible();
 
@@ -1047,7 +1087,11 @@ void displaySubmenu() {
             if (!isBack) {
                 tft.print("| ");
             }
+#if defined(BOARD_ESP32_WROOM_OLED)
+            tft.print(oledTruncateItem(active_submenu_items[i]));
+#else
             tft.print(active_submenu_items[i]);
+#endif
         }
 
         // Highlight the currently selected item.
@@ -1062,7 +1106,11 @@ void displaySubmenu() {
                 if (!newBack) {
                     tft.print("| ");
                 }
+#if defined(BOARD_ESP32_WROOM_OLED)
+                tft.print(oledTruncateItem(active_submenu_items[current_submenu_index]));
+#else
                 tft.print(active_submenu_items[current_submenu_index]);
+#endif
             }
         }
 
@@ -1085,7 +1133,11 @@ void displaySubmenu() {
                 if (!prevBack) {
                     tft.print("| ");
                 }
+#if defined(BOARD_ESP32_WROOM_OLED)
+                tft.print(oledTruncateItem(active_submenu_items[last_submenu_index]));
+#else
                 tft.print(active_submenu_items[last_submenu_index]);
+#endif
             }
         }
 
@@ -1100,7 +1152,11 @@ void displaySubmenu() {
             if (!newBack) {
                 tft.print("| ");
             }
+#if defined(BOARD_ESP32_WROOM_OLED)
+            tft.print(oledTruncateItem(active_submenu_items[current_submenu_index]));
+#else
             tft.print(active_submenu_items[current_submenu_index]);
+#endif
         }
 
         last_submenu_index = current_submenu_index;
@@ -1116,6 +1172,9 @@ void displayPagedSubmenu() {
     const int featureCount = pagedFeatureCount();
     tft.setTextFont(2);
     tft.setTextSize(1);
+#if defined(BOARD_ESP32_WROOM_OLED)
+    tft.setTextWrap(false);  // prevent long names from wrapping to next row
+#endif
 
     // OLED-aware scroll window for the paged submenu (WiFi / Bluetooth).
     // Same layout constants as the regular submenu: 60 source-px per row, 4
@@ -1176,7 +1235,11 @@ void displayPagedSubmenu() {
             tft.drawBitmap(10, yPos, active_submenu_icons[i], 16, 16, UI_TEXT);
             tft.setCursor(30, yPos);
             tft.print("| ");
+#if defined(BOARD_ESP32_WROOM_OLED)
+            tft.print(oledTruncateItem(active_submenu_items[i]));
+#else
             tft.print(active_submenu_items[i]);
+#endif
         }
         // Highlight currently-selected feature row (if a feature is selected).
         if (current_submenu_index >= 0 && current_submenu_index < featureCount) {
@@ -1187,7 +1250,11 @@ void displayPagedSubmenu() {
                 tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
                 tft.setCursor(30, new_yPos);
                 tft.print("| ");
+#if defined(BOARD_ESP32_WROOM_OLED)
+                tft.print(oledTruncateItem(active_submenu_items[current_submenu_index]));
+#else
                 tft.print(active_submenu_items[current_submenu_index]);
+#endif
             }
         }
 #if defined(BOARD_ESP32_WROOM_OLED)
@@ -1207,7 +1274,11 @@ void displayPagedSubmenu() {
                 tft.drawBitmap(10, prev_yPos, active_submenu_icons[last_submenu_index], 16, 16, UI_TEXT);
                 tft.setCursor(30, prev_yPos);
                 tft.print("| ");
+#if defined(BOARD_ESP32_WROOM_OLED)
+                tft.print(oledTruncateItem(active_submenu_items[last_submenu_index]));
+#else
                 tft.print(active_submenu_items[last_submenu_index]);
+#endif
             }
         }
 
@@ -1219,7 +1290,11 @@ void displayPagedSubmenu() {
                 tft.drawBitmap(10, new_yPos, active_submenu_icons[current_submenu_index], 16, 16, UI_ICON);
                 tft.setCursor(30, new_yPos);
                 tft.print("| ");
+#if defined(BOARD_ESP32_WROOM_OLED)
+                tft.print(oledTruncateItem(active_submenu_items[current_submenu_index]));
+#else
                 tft.print(active_submenu_items[current_submenu_index]);
+#endif
                 s_pagedFooterFocus = -1;
             }
         } else if (current_submenu_index == pagedBackBtnIndex()) {
@@ -1246,6 +1321,9 @@ void displayOtherMenuGrid() {
     last_menu_index = -1;
 
     tft.setTextFont(2);
+#if defined(BOARD_ESP32_WROOM_OLED)
+    tft.setTextWrap(false);  // prevent "Other" grid labels from wrapping
+#endif
 
     if (!other_menu_grid_initialized) {
         tft.fillScreen(UI_BG);
@@ -1350,6 +1428,9 @@ const uint16_t icon_colors[NUM_MENU_ITEMS] = {
     other_menu_grid_initialized = false;
     last_other_menu_index = -1;
     tft.setTextFont(2);
+#if defined(BOARD_ESP32_WROOM_OLED)
+    tft.setTextWrap(false);  // prevent menu labels from wrapping into next row
+#endif
 
     if (!menu_initialized) {
         tft.fillScreen(UI_BG);
@@ -1446,6 +1527,7 @@ void handleWiFiSubmenuButtons() {
     if (isButtonPressed(BTN_SELECT)) {
         last_interaction_time = millis();
         delay(70);
+        waitForSelectRelease();
 
         // Footer: Next / Prev
         if (current_submenu_index == pagedPageBtnIndex()) {
@@ -2267,6 +2349,7 @@ void handleBluetoothSubmenuButtons() {
     if (isButtonPressed(BTN_SELECT)) {
         last_interaction_time = millis();
         delay(70);
+        waitForSelectRelease();
 
         if (current_submenu_index == pagedPageBtnIndex()) {
             bluetooth_submenu_page = (bluetooth_submenu_page == 0) ? 1 : 0;
@@ -2918,6 +3001,7 @@ void handleNRFSubmenuButtons() {
     if (isButtonPressed(BTN_SELECT)) {
         last_interaction_time = millis();
         delay(200);
+        waitForSelectRelease();
 
         if (current_submenu_index == 6) {
             in_sub_menu = false;
@@ -3393,6 +3477,7 @@ void handleSubGHzSubmenuButtons() {
     if (isButtonPressed(BTN_SELECT)) {
         last_interaction_time = millis();
         delay(200);
+        waitForSelectRelease();
 
         if (current_submenu_index == 5) {
             in_sub_menu = false;
@@ -3849,6 +3934,7 @@ void handleToolsSubmenuButtons() {
     if (isButtonPressed(BTN_SELECT)) {
         last_interaction_time = millis();
         delay(200);
+        waitForSelectRelease();
 
         if (current_submenu_index == TOOLS_IDX_BACK) {
             in_sub_menu = false;
@@ -4099,6 +4185,7 @@ void handleOtherSubmenuButtons() {
     if (isButtonPressed(BTN_SELECT)) {
         last_interaction_time = millis();
         delay(200);
+        waitForSelectRelease();
 
         if (other_layer == OTHER_LAYER_HOME) {
             if (current_submenu_index == other_NUM_SUBMENU_ITEMS - 1) {
@@ -4613,24 +4700,16 @@ void handleButtons() {
     // Pressing it anywhere — main menu, submenu, or active feature — returns
     // to the previous level. This gives the user a consistent "voltar" button
     // matching the 4-button hardware spec.
-    //
-    // The buzzer beep is intentionally NOT played here. Each feature's loop
-    // also detects BTN_LEFT via featureExitButtonPressed() and may play its
-    // own beep — calling buzzerBeep() here too would produce a DOUBLE beep
-    // per key press (the user's "bip longo" complaint). The single crisp
-    // beep is played by buzzerClick() in the BTN_UP / BTN_DOWN / BTN_SELECT
-    // branches below, which are only reached when we're at the menu level
-    // (not inside a feature loop).
     if (isButtonPressed(BTN_LEFT)) {
+        buzzerBeep(1800, 15);   // short back beep — one crisp bip per key press
         if (feature_active && !feature_exit_requested) {
             // Inside a feature (scanner, replay, terminal, etc.) — request exit.
             // The feature's loop will see this flag and return control.
             feature_exit_requested = true;
             last_interaction_time = millis();
-            delay(180);   // debounce
+            delay(200);   // debounce
             return;
         } else if (in_sub_menu) {
-            buzzerClick();   // single short bip when leaving a submenu
             // Inside a submenu (list of features) — return to main menu.
             in_sub_menu = false;
             feature_active = false;
@@ -4639,7 +4718,7 @@ void handleButtons() {
             is_main_menu = false;
             displayMenu();
             last_interaction_time = millis();
-            delay(180);   // debounce
+            delay(200);   // debounce
             return;
         }
         // In main menu: BTN_LEFT does nothing (already at top level).
@@ -4711,9 +4790,9 @@ void handleButtons() {
         }
 
         if (isButtonPressed(BTN_SELECT)) {
-            buzzerClick();   // single short crisp bip per key press
+            buzzerBeep(2600, 20);   // short select beep — one crisp bip per key press
             last_interaction_time = millis();
-            delay(180);
+            delay(200);
 
             if (current_menu_index == 3) {
                 handleSettingsSubmenuButtons();
@@ -4875,9 +4954,8 @@ void setup() {
   // Configure the GPIO 4 buzzer. After this, any feature can call buzzerBeep()
   // or buzzerClick() to play a tone. buzzerPoll() in loop() silences it.
   buzzerInit();
-  // Play a single short boot beep so the user can confirm the buzzer works
-  // at startup. Keep it short (15 ms) so it doesn't sound like a long tone.
-  buzzerBeep(1800, 15);
+  // Play a short boot beep so the user can confirm the buzzer works at startup.
+  buzzerBeep(1800, 40);
 #endif
 
 #if defined(BOARD_ESP32_WROOM_OLED)

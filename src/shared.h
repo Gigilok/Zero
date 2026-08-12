@@ -973,4 +973,74 @@ extern bool feature_exit_requested;
   #define ESP32DIV_LINE_HEIGHT       12
 #endif
 
+/*──────────────────── OLED-aware scanner viewport ───────────────────*/
+// On the 128x64 OLED the list area is bounded by:
+//   * top    = status bar bottom (~4 OLED-px) + header row (~6 OLED-px)
+//   * bottom = 60 OLED-px (leaving 4 px for the footer hint line)
+// We expose these as source-space constants so every scanner can:
+//   1. compute its per-page row count from ESP32DIV_LIST_BOTTOM_Y
+//   2. draw a scrollbar on the right edge when items overflow
+//   3. lay out a compact 2-button footer ("Rescan" / "Next") that the
+//      physical buttons (BTN_LEFT / BTN_RIGHT / BTN_SELECT) can navigate.
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // 60 OLED-px * 320/64 = 300 source-px
+  #define ESP32DIV_LIST_BOTTOM_Y     300
+  // Per-page rows = (BOTTOM_Y - FIRST_ROW_Y) / ROW_H = (300-50)/50 = 5
+  #define ESP32DIV_LIST_PER_PAGE     5
+  // Footer button strip — 2 buttons of ~110 source-px each (≈22 OLED-px),
+  // enough to fit "Rescan" / "Next" / "Prev" labels.
+  #define ESP32DIV_FOOTER_Y          300
+  #define ESP32DIV_FOOTER_H          16
+  // Scrollbar on the right edge (source-px). 9 source-px wide ≈ 3 OLED-px,
+  // clearly visible. Track spans the whole list area; indicator height =
+  // visible_count / total_count.
+  #define ESP32DIV_SCROLLBAR_X       (TFT_WIDTH - 9)
+  #define ESP32DIV_SCROLLBAR_W       6
+  #define ESP32DIV_SCROLLBAR_MIN_H   12
+#else
+  #define ESP32DIV_LIST_BOTTOM_Y     290
+  #define ESP32DIV_LIST_PER_PAGE     10
+  #define ESP32DIV_FOOTER_Y          290
+  #define ESP32DIV_FOOTER_H          30
+  #define ESP32DIV_SCROLLBAR_X       0
+  #define ESP32DIV_SCROLLBAR_W       0
+  #define ESP32DIV_SCROLLBAR_MIN_H   0
+#endif
+
+// Helper: draw an OLED-aware scrollbar on the right edge for any scanner
+// list. Caller passes visible_count (rows per page), total_count, and
+// scroll_offset (index of first visible item). On TFT this is a no-op.
+// Implemented in utils.cpp so every feature can call it without duplicating
+// the geometry math.
+void esp32divDrawListScrollbar(int visibleCount, int totalCount, int scrollOffset);
+
+// Helper: draw a 2-button footer strip at the bottom of the screen for any
+// scanner. The two labels are short strings (≤8 chars). The "selected"
+// parameter (0 or 1) highlights which button the user would activate by
+// pressing BTN_SELECT — BTN_LEFT/BTN_RIGHT move between the two.
+// On TFT boards this is a no-op (the original project uses touch for these).
+void esp32divDrawScannerFooter(const char* leftLabel, const char* rightLabel, int selected);
+
+// Helper: poll the 4 physical buttons during a scanner loop and decode them
+// into a navigation intent. Returns one of:
+//   0 = no input
+//   1 = UP      (move selection up)
+//   2 = DOWN    (move selection down)
+//   3 = LEFT    (previous page / cancel / back)
+//   4 = RIGHT   (next page / advance)
+//   5 = SELECT  (activate current row)
+//   6 = EXIT    (BTN_LEFT held longer — exit feature)
+// Includes 200ms debounce. Used by every scanner loop so they all behave
+// identically on the OLED board.
+enum Esp32DivScanInput : uint8_t {
+  ESP32DIV_INPUT_NONE   = 0,
+  ESP32DIV_INPUT_UP     = 1,
+  ESP32DIV_INPUT_DOWN   = 2,
+  ESP32DIV_INPUT_LEFT   = 3,
+  ESP32DIV_INPUT_RIGHT  = 4,
+  ESP32DIV_INPUT_SELECT = 5,
+  ESP32DIV_INPUT_EXIT   = 6,
+};
+Esp32DivScanInput esp32divReadScanInput();
+
 #endif

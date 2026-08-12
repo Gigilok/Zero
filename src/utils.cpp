@@ -298,6 +298,115 @@ void printWrappedText(int x, int y, int maxWidth, const char* text) {
     }
 }
 
+/*────────────────── OLED scanner helpers ──────────────────*/
+// These helpers centralize the OLED-aware scanner UI patterns so every
+// scanner (WiFi, BLE, Deauther, Probe, WPS, ARP, Hidden, Karma, Captive
+// Portal, ESB Sniffer, etc.) can:
+//   * draw a scrollbar without duplicating geometry math
+//   * draw a 2-button footer that the physical buttons can navigate
+//   * decode physical button presses into a single navigation intent
+// All three are no-ops on non-OLED boards (the original TFT touch UI is
+// kept untouched).
+void esp32divDrawListScrollbar(int visibleCount, int totalCount, int scrollOffset) {
+#if defined(BOARD_ESP32_WROOM_OLED)
+    if (totalCount <= visibleCount) return;
+    if (visibleCount <= 0 || totalCount <= 0) return;
+
+    const int trackTop    = ESP32DIV_LIST_FIRST_ROW_Y;
+    const int trackBottom = ESP32DIV_LIST_BOTTOM_Y;
+    const int trackH      = trackBottom - trackTop;
+    if (trackH <= 0) return;
+
+    int indicatorH = (visibleCount * trackH) / totalCount;
+    if (indicatorH < ESP32DIV_SCROLLBAR_MIN_H) indicatorH = ESP32DIV_SCROLLBAR_MIN_H;
+    if (indicatorH > trackH) indicatorH = trackH;
+
+    const int maxScroll = totalCount - visibleCount;
+    const int indicatorY = trackTop + (maxScroll > 0
+        ? (scrollOffset * (trackH - indicatorH)) / maxScroll
+        : 0);
+
+    // Faint track + accent indicator (UI_LINE / UI_ICON come from shared.h).
+    tft.fillRect(ESP32DIV_SCROLLBAR_X, trackTop,
+                 ESP32DIV_SCROLLBAR_W, trackH, UI_LINE);
+    tft.fillRect(ESP32DIV_SCROLLBAR_X, indicatorY,
+                 ESP32DIV_SCROLLBAR_W, indicatorH, UI_ICON);
+#else
+    (void)visibleCount; (void)totalCount; (void)scrollOffset;
+#endif
+}
+
+void esp32divDrawScannerFooter(const char* leftLabel, const char* rightLabel, int selected) {
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // 2 buttons side-by-side at the bottom of the screen.
+    // Each button is half the screen width minus a 4-px gap.
+    const int y = ESP32DIV_FOOTER_Y;
+    const int h = ESP32DIV_FOOTER_H;
+    const int halfW = (TFT_WIDTH - 6) / 2;
+
+    // Clear footer area first.
+    tft.fillRect(0, y, TFT_WIDTH, h, UI_BG);
+
+    // Left button
+    {
+        const int x = 2;
+        const bool sel = (selected == 0);
+        tft.fillRoundRect(x, y, halfW, h, 3, sel ? UI_ICON : UI_FG);
+        tft.drawRoundRect(x, y, halfW, h, 3, UI_LINE);
+        tft.setTextColor(sel ? UI_BG : UI_TEXT, sel ? UI_ICON : UI_FG);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextSize(1);
+        if (leftLabel) tft.drawString(leftLabel, x + halfW / 2, y + h / 2);
+    }
+    // Right button
+    {
+        const int x = 4 + halfW;
+        const bool sel = (selected == 1);
+        tft.fillRoundRect(x, y, halfW, h, 3, sel ? UI_ICON : UI_FG);
+        tft.drawRoundRect(x, y, halfW, h, 3, UI_LINE);
+        tft.setTextColor(sel ? UI_BG : UI_TEXT, sel ? UI_ICON : UI_FG);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextSize(1);
+        if (rightLabel) tft.drawString(rightLabel, x + halfW / 2, y + h / 2);
+    }
+    tft.setTextDatum(TL_DATUM);
+#else
+    (void)leftLabel; (void)rightLabel; (void)selected;
+#endif
+}
+
+Esp32DivScanInput esp32divReadScanInput() {
+    static unsigned long s_lastInputMs = 0;
+    const unsigned long now = millis();
+    if (now - s_lastInputMs < 180) return ESP32DIV_INPUT_NONE;  // debounce
+
+    // EXIT (back) takes priority so the user can always leave.
+    if (isButtonPressed(BTN_LEFT)) {
+        s_lastInputMs = now;
+        // BTN_LEFT can mean "previous page" OR "exit" depending on context.
+        // We return EXIT here; callers that want "previous page" semantics
+        // can intercept BTN_LEFT themselves before calling this helper.
+        return ESP32DIV_INPUT_EXIT;
+    }
+    if (isButtonPressed(BTN_UP)) {
+        s_lastInputMs = now;
+        return ESP32DIV_INPUT_UP;
+    }
+    if (isButtonPressed(BTN_DOWN)) {
+        s_lastInputMs = now;
+        return ESP32DIV_INPUT_DOWN;
+    }
+    if (isButtonPressed(BTN_RIGHT)) {
+        s_lastInputMs = now;
+        return ESP32DIV_INPUT_RIGHT;
+    }
+    if (isButtonPressed(BTN_SELECT)) {
+        s_lastInputMs = now;
+        return ESP32DIV_INPUT_SELECT;
+    }
+    return ESP32DIV_INPUT_NONE;
+}
+
 namespace FeatureUI {
 
 #ifndef FEATURE_TEXT
@@ -1021,8 +1130,10 @@ void buzzerPoll() {
 }
 
 void buzzerClick() {
-  // Short UI feedback: 2400 Hz, 12 ms — one crisp beep per key press.
-  buzzerBeep(2400, 12);
+  // Short UI feedback: 2400 Hz, 8 ms — one crisp beep per key press.
+  // 8 ms is the shortest duration the user can perceive as a distinct
+  // "click" without it sounding like a long tone.
+  buzzerBeep(2400, 8);
 }
 #else
 // Non-OLED boards or no buzzer pin — no-op stubs.
@@ -1687,6 +1798,32 @@ void terminalLoop() {
     maintainTouchNavBar();
   }
   terminalHandleNavButtons();
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // On the OLED board there is no touch nav bar — terminalHandleNavButtons()
+  // returns early. Map physical buttons directly so the user can exit, cycle
+  // baud, and toggle the active state without touch.
+  {
+    static unsigned long sLastBtnMs = 0;
+    const unsigned long now = millis();
+    if (now - sLastBtnMs >= 180) {
+      if (isButtonPressed(BTN_LEFT)) {
+        feature_exit_requested = true;
+        sLastBtnMs = now;
+        return;
+      }
+      if (isButtonPressed(BTN_RIGHT)) {
+        terminalCycleBaud();
+        sLastBtnMs = now;
+        return;
+      }
+      if (isButtonPressed(BTN_SELECT)) {
+        terminalSetActive(!terminalActive);
+        sLastBtnMs = now;
+        return;
+      }
+    }
+  }
+#endif
   runUI();
 
   if (terminalActive) {
@@ -1710,6 +1847,20 @@ void terminalLoop() {
 namespace AppSettingsUI {
 
 static const int SCREEN_W = 240;
+#if defined(BOARD_ESP32_WROOM_OLED)
+// On the 128x64 OLED the original 240x320 layout's 32 source-px row height
+// scales to only 6.4 OLED-px — text (8 px tall) overlaps the next row.
+// Use 60 source-px per row (= 12 OLED-px = 8 px font + 4 px gap) so each
+// settings card has enough room for a label + a small widget.
+static const int BAR_H    = 20;
+static const int TITLE_Y  = BAR_H + 2;
+static const int TITLE_H  = 12;
+static const int ROW_H    = 60;
+static const int GAP_Y    = 6;
+static const int PAD_X    = 6;
+static const int LABEL_W  = 80;
+static const int RADIUS   = 4;
+#else
 static const int BAR_H    = 22;
 static const int TITLE_Y  = BAR_H + 4;
 static const int TITLE_H  = 16;
@@ -1718,6 +1869,7 @@ static const int GAP_Y    = 4;
 static const int PAD_X    = 12;
 static const int LABEL_W  = 92;
 static const int RADIUS   = 8;
+#endif
 
 static inline int rowY(int i) { return TITLE_Y + TITLE_H + 6 + i * (ROW_H + GAP_Y); }
 
@@ -2316,9 +2468,26 @@ void loop(){
   bool selectNow = isButtonPressed(BTN_SELECT);
 
   if (selectNow && !selectWasDown && (now - lastActionMs > ACTION_DEBOUNCE_MS)) {
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // On OLED, BTN_SELECT cycles values DOWN (decrease brightness / previous
+    // theme / previous accent / disable / etc.). Exit is via BTN_LEFT,
+    // handled by featureExitButtonPressed() at the top of the calling
+    // handleSettingsSubmenuButtons() loop... but that's not how the loop is
+    // structured here. Actually, this loop runs inside handleSettingsSubmenuButtons
+    // which only exits when feature_exit_requested is set. We set it here on
+    // SELECT so the user has a clear way out. (BTN_LEFT decreases a value.)
+    // TODO: a future cleanup could re-route Settings navigation so BTN_LEFT
+    // = back, BTN_RIGHT = increase, BTN_SELECT = decrease — matching the
+    // scanner convention. For now SELECT = exit keeps the user from getting
+    // stuck in the Settings panel.
     feature_exit_requested = true;
     lastActionMs = now;
     return;
+#else
+    feature_exit_requested = true;
+    lastActionMs = now;
+    return;
+#endif
   }
 
   if (upNow && !upWasDown && (now - lastNavMs > NAV_DEBOUNCE_MS)) {
@@ -3172,6 +3341,79 @@ void loop() {
     }
   }
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // On the OLED board there is no touch. Map the 4 physical buttons to the
+  // file manager actions directly so the user can navigate without a touch
+  // panel:
+  //   BTN_UP/DOWN  = move selection
+  //   BTN_RIGHT    = open / enter directory / confirm
+  //   BTN_SELECT   = refresh listing (Browser) / open Info page (Browser) /
+  //                  confirm delete (ConfirmDelete)
+  //   BTN_LEFT     = back / exit
+  {
+    static unsigned long sLastBtnMs = 0;
+    const unsigned long now = millis();
+    if (now - sLastBtnMs < 160) {
+      // debounce — fall through to touch handling (which is a no-op on OLED).
+    } else if (page == Page::Browser) {
+      if (isButtonPressed(BTN_UP) && !entries.empty()) {
+        sel--; clampSel(); drawBrowserPage(false); sLastBtnMs = now; return;
+      }
+      if (isButtonPressed(BTN_DOWN) && !entries.empty()) {
+        sel++; clampSel(); drawBrowserPage(false); sLastBtnMs = now; return;
+      }
+      if (isButtonPressed(BTN_RIGHT)) {
+        openSelected(); sLastBtnMs = now; return;
+      }
+      if (isButtonPressed(BTN_SELECT)) {
+        // SELECT opens the Info page for the selected entry (so the user can
+        // see file size / delete it). Refresh is BTN_LEFT while in Browser.
+        if (!entries.empty()) {
+          page = Page::Info;
+          uiDirty = true;
+        }
+        sLastBtnMs = now; return;
+      }
+      if (isButtonPressed(BTN_LEFT)) {
+        // At root, BTN_LEFT exits; otherwise go up one directory.
+        if (cwd == "/" || cwd.length() <= 1) {
+          feature_exit_requested = true;
+        } else {
+          // Pop one level: /foo/bar -> /foo
+          String parent = "/";
+          int lastSlash = cwd.lastIndexOf('/');
+          if (lastSlash > 0) parent = cwd.substring(0, lastSlash);
+          if (parent.length() == 0) parent = "/";
+          reloadDir(parent, nullptr);
+          drawBrowserPage(true);
+        }
+        sLastBtnMs = now; return;
+      }
+    } else if (page == Page::Info) {
+      if (isButtonPressed(BTN_LEFT) || isButtonPressed(BTN_RIGHT)) {
+        drawBrowserPage(); sLastBtnMs = now; return;
+      }
+      if (isButtonPressed(BTN_SELECT)) {
+        drawConfirmDeletePage(); sLastBtnMs = now; return;
+      }
+    } else if (page == Page::ConfirmDelete) {
+      if (isButtonPressed(BTN_LEFT)) {
+        drawBrowserPage(); sLastBtnMs = now; return;
+      }
+      if (isButtonPressed(BTN_SELECT) || isButtonPressed(BTN_RIGHT)) {
+        String err;
+        const bool ok = deleteSelected(&err);
+        if (!ok) {
+          showNotification("Delete", err.c_str());
+          delay(500);
+        }
+        reloadDir(cwd, nullptr);
+        drawBrowserPage();
+        sLastBtnMs = now; return;
+      }
+    }
+  }
+#else
   // Physical navigation (kept for devices without touch nav bar).
   if (!featureHasTouchNavBar() && isButtonPressed(BTN_UP)) {
     if (page == Page::Browser && !entries.empty()) { sel--; clampSel(); drawBrowserPage(false); }
@@ -3183,6 +3425,7 @@ void loop() {
     delay(160);
     return;
   }
+#endif
 
   int x, y;
   bool touched = readTouchXY(x, y);

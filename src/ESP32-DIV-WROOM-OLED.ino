@@ -792,9 +792,16 @@ bool featureExitButtonPressed() {
   // On BOARD_ESP32_WROOM_OLED the user has 4 buttons:
   //   BTN_UP (GPIO 5), BTN_DOWN (GPIO 27), BTN_SELECT (GPIO 32), BTN_LEFT (GPIO 33).
   // The black-wired button (BTN_LEFT) is the dedicated BACK / EXIT button.
-  // Long-pressing SELECT also exits a feature (legacy behavior on other boards).
+  // SELECT is used to OPEN details / activate rows inside scanners, so it
+  // must NOT be interpreted as an exit request on this board — otherwise
+  // every "open details" press would also exit the scanner.
+#if defined(BOARD_ESP32_WROOM_OLED)
+  return isPhysicalButtonPressed(BTN_LEFT) || isTouchNavButtonPressed(BTN_LEFT);
+#else
+  // Other boards: long-pressing SELECT also exits a feature (legacy behavior).
   return isPhysicalButtonPressed(BTN_LEFT) || isTouchNavButtonPressed(BTN_LEFT) ||
          isPhysicalButtonPressed(BTN_SELECT) || isTouchNavButtonPressed(BTN_SELECT);
+#endif
 }
 
 static void showFeatureUnavailable(const char* featureName, const char* requirement) {
@@ -1472,7 +1479,7 @@ void handleWiFiSubmenuButtons() {
                 current_submenu_index = 0;
                 in_sub_menu = true;
                 PacketMonitor::ptmLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -1642,7 +1649,7 @@ void handleWiFiSubmenuButtons() {
                 current_submenu_index = 5;
                 in_sub_menu = true;
                 WifiScan::wifiscanLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -1708,7 +1715,7 @@ void handleWiFiSubmenuButtons() {
                 current_submenu_index = 7;
                 in_sub_menu = true;
                 HiddenSsidReveal::hiddenSsidLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -1741,7 +1748,7 @@ void handleWiFiSubmenuButtons() {
                 current_submenu_index = 0;
                 in_sub_menu = true;
                 WpsScanner::wpsScannerLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -1774,7 +1781,7 @@ void handleWiFiSubmenuButtons() {
                 current_submenu_index = 1;
                 in_sub_menu = true;
                 ArpScanner::arpScannerLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -1807,7 +1814,7 @@ void handleWiFiSubmenuButtons() {
                 current_submenu_index = 2;
                 in_sub_menu = true;
                 KarmaAttack::karmaLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -1893,7 +1900,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 0;
                         in_sub_menu = true;
                         PacketMonitor::ptmLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2021,7 +2028,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 4;
                         in_sub_menu = true;
                         DeauthDetect::deauthdetectLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2053,7 +2060,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 5;
                         in_sub_menu = true;
                         WifiScan::wifiscanLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2117,7 +2124,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 7;
                         in_sub_menu = true;
                         HiddenSsidReveal::hiddenSsidLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2149,7 +2156,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 0;
                         in_sub_menu = true;
                         WpsScanner::wpsScannerLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2181,7 +2188,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 1;
                         in_sub_menu = true;
                         ArpScanner::arpScannerLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2213,7 +2220,7 @@ void handleWiFiSubmenuButtons() {
                         current_submenu_index = 2;
                         in_sub_menu = true;
                         KarmaAttack::karmaLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2291,7 +2298,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 0;
                 in_sub_menu = true;
                 BleJammer::blejamLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2326,7 +2333,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 1;
                 in_sub_menu = true;
                 BleSpoofer::spooferLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2361,7 +2368,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 2;
                 in_sub_menu = true;
                 SourApple::sourappleLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2396,7 +2403,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 3;
                 in_sub_menu = true;
                 AirTagSpoofer::airTagLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2431,7 +2438,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 4;
                 in_sub_menu = true;
                 AirTagSniffer::airTagSnifferLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2466,7 +2473,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 5;
                 in_sub_menu = true;
                 BleSniffer::blesnifferLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2501,7 +2508,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 6;
                 in_sub_menu = true;
                 BleScan::bleScanLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2539,7 +2546,7 @@ void handleBluetoothSubmenuButtons() {
                 current_submenu_index = 0;
                 in_sub_menu = true;
                 BleSkimmer::bleSkimmerLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2624,7 +2631,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 0;
                         in_sub_menu = true;
                         BleJammer::blejamLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2657,7 +2664,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 1;
                         in_sub_menu = true;
                         BleSpoofer::spooferLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2690,7 +2697,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 2;
                         in_sub_menu = true;
                         SourApple::sourappleLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2723,7 +2730,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 3;
                         in_sub_menu = true;
                         AirTagSpoofer::airTagLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2756,7 +2763,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 4;
                         in_sub_menu = true;
                         AirTagSniffer::airTagSnifferLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2789,7 +2796,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 5;
                         in_sub_menu = true;
                         BleSniffer::blesnifferLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2822,7 +2829,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 6;
                         in_sub_menu = true;
                         BleScan::bleScanLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2857,7 +2864,7 @@ void handleBluetoothSubmenuButtons() {
                         current_submenu_index = 0;
                         in_sub_menu = true;
                         BleSkimmer::bleSkimmerLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -2931,7 +2938,7 @@ void handleNRFSubmenuButtons() {
                 current_submenu_index = 0;
                 in_sub_menu = true;
                 Scanner::scannerLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -2966,7 +2973,7 @@ void handleNRFSubmenuButtons() {
                 current_submenu_index = 1;
                 in_sub_menu = true;
                 ProtoKill::prokillLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -3001,7 +3008,7 @@ void handleNRFSubmenuButtons() {
                 current_submenu_index = 2;
                 in_sub_menu = true;
                 EsbSniffer::esbSnifferLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -3036,7 +3043,7 @@ void handleNRFSubmenuButtons() {
                 current_submenu_index = 3;
                 in_sub_menu = true;
                 EsbReplay::esbReplayLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -3071,7 +3078,7 @@ void handleNRFSubmenuButtons() {
                 current_submenu_index = 4;
                 in_sub_menu = true;
                 MouseJack::mouseJackLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -3106,7 +3113,7 @@ void handleNRFSubmenuButtons() {
                 current_submenu_index = 5;
                 in_sub_menu = true;
                 MouseJackInject::mouseJackInjectLoop();
-                if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                if (featureExitButtonPressed()) {
                     in_sub_menu = true;
                     is_main_menu = false;
                     submenu_initialized = false;
@@ -3167,7 +3174,7 @@ void handleNRFSubmenuButtons() {
                         current_submenu_index = 0;
                         in_sub_menu = true;
                         Scanner::scannerLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -3200,7 +3207,7 @@ void handleNRFSubmenuButtons() {
                         current_submenu_index = 1;
                         in_sub_menu = true;
                         ProtoKill::prokillLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -3233,7 +3240,7 @@ void handleNRFSubmenuButtons() {
                         current_submenu_index = 2;
                         in_sub_menu = true;
                         EsbSniffer::esbSnifferLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -3266,7 +3273,7 @@ void handleNRFSubmenuButtons() {
                         current_submenu_index = 3;
                         in_sub_menu = true;
                         EsbReplay::esbReplayLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -3299,7 +3306,7 @@ void handleNRFSubmenuButtons() {
                         current_submenu_index = 4;
                         in_sub_menu = true;
                         MouseJack::mouseJackLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -3332,7 +3339,7 @@ void handleNRFSubmenuButtons() {
                         current_submenu_index = 5;
                         in_sub_menu = true;
                         MouseJackInject::mouseJackInjectLoop();
-                        if (isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+                        if (featureExitButtonPressed()) {
                             in_sub_menu = true;
                             is_main_menu = false;
                             submenu_initialized = false;
@@ -4606,16 +4613,24 @@ void handleButtons() {
     // Pressing it anywhere — main menu, submenu, or active feature — returns
     // to the previous level. This gives the user a consistent "voltar" button
     // matching the 4-button hardware spec.
+    //
+    // The buzzer beep is intentionally NOT played here. Each feature's loop
+    // also detects BTN_LEFT via featureExitButtonPressed() and may play its
+    // own beep — calling buzzerBeep() here too would produce a DOUBLE beep
+    // per key press (the user's "bip longo" complaint). The single crisp
+    // beep is played by buzzerClick() in the BTN_UP / BTN_DOWN / BTN_SELECT
+    // branches below, which are only reached when we're at the menu level
+    // (not inside a feature loop).
     if (isButtonPressed(BTN_LEFT)) {
-        buzzerBeep(1800, 15);   // short back beep — one crisp bip per key press
         if (feature_active && !feature_exit_requested) {
             // Inside a feature (scanner, replay, terminal, etc.) — request exit.
             // The feature's loop will see this flag and return control.
             feature_exit_requested = true;
             last_interaction_time = millis();
-            delay(200);   // debounce
+            delay(180);   // debounce
             return;
         } else if (in_sub_menu) {
+            buzzerClick();   // single short bip when leaving a submenu
             // Inside a submenu (list of features) — return to main menu.
             in_sub_menu = false;
             feature_active = false;
@@ -4624,7 +4639,7 @@ void handleButtons() {
             is_main_menu = false;
             displayMenu();
             last_interaction_time = millis();
-            delay(200);   // debounce
+            delay(180);   // debounce
             return;
         }
         // In main menu: BTN_LEFT does nothing (already at top level).
@@ -4696,9 +4711,9 @@ void handleButtons() {
         }
 
         if (isButtonPressed(BTN_SELECT)) {
-            buzzerBeep(2600, 20);   // short select beep — one crisp bip per key press
+            buzzerClick();   // single short crisp bip per key press
             last_interaction_time = millis();
-            delay(200);
+            delay(180);
 
             if (current_menu_index == 3) {
                 handleSettingsSubmenuButtons();
@@ -4860,8 +4875,9 @@ void setup() {
   // Configure the GPIO 4 buzzer. After this, any feature can call buzzerBeep()
   // or buzzerClick() to play a tone. buzzerPoll() in loop() silences it.
   buzzerInit();
-  // Play a short boot beep so the user can confirm the buzzer works at startup.
-  buzzerBeep(1800, 40);
+  // Play a single short boot beep so the user can confirm the buzzer works
+  // at startup. Keep it short (15 ms) so it doesn't sound like a long tone.
+  buzzerBeep(1800, 15);
 #endif
 
 #if defined(BOARD_ESP32_WROOM_OLED)

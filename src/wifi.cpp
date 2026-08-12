@@ -376,6 +376,126 @@ unsigned int color_cursor = 2016;
 
 void do_sampling_FFT() {
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // -----------------------------------------------------------------------
+  // OLED-native FFT waterfall (BOARD_ESP32_WROOM_OLED only).
+  // -----------------------------------------------------------------------
+  // The original TFT code draws a colored mirrored waterfall centered at
+  // x=120 (240 px wide) plus an area (line) graph at y=38..88. On the
+  // 128x64 1-bit OLED both fail:
+  //   * x=120..247 maps via sx() to OLED x=64..131 — half off-screen right.
+  //   * Mirrored x=120..-7 maps to OLED x=64..-3 — half off-screen left.
+  //   * y=epoch+91 advances at 0.2 OLED px per frame (5 frames per pixel)
+  //     → graph appears as a thin smear.
+  //   * Each tft.drawPixel() triggers a full 1024-byte I2C framebuffer
+  //     flush, so 256 pixels per frame = ~2.5s per frame → unusable.
+  //
+  // OLED-specific implementation (mirrors subghz.cpp's do_sampling):
+  //   * Renders directly to the SSD1306 framebuffer via tft.oled()->drawPixel
+  //     (no auto-flush — single display() call per frame).
+  //   * Circular buffer of kOledGraphH rows × 128 cols (640 bytes) so the
+  //     waterfall scrolls cleanly without affecting the status bar.
+  //   * Thresholds magnitude to 1-bit (signal present / absent).
+  //   * Graph area: x=0..127, y=20..59 (40 px tall, below the 20-px header
+  //     that holds Ch/Packet/RSSI/Deauth labels).
+  //   * Auto-attenuation keeps the magnitudes normalized.
+  // -----------------------------------------------------------------------
+  constexpr int kOledGraphTop    = 20;
+  constexpr int kOledGraphH      = 40;  // y=20..59
+  constexpr int kOledGraphW      = 128;
+  // Lower threshold so even weak RF activity shows up on the graph. The
+  // user reported "graphs don't appear" — with threshold=24 + attenuation
+  // climbing from 10, low-activity channels produced no visible bars.
+  constexpr int kOledThreshold   = 6;
+
+  static uint8_t s_fftBuf[kOledGraphH][kOledGraphW / 8];  // 640 bytes
+  static int     s_fftWriteIdx = 0;
+  static bool    s_fftBufInited = false;
+  if (!s_fftBufInited) {
+    memset(s_fftBuf, 0, sizeof(s_fftBuf));
+    s_fftBufInited = true;
+  }
+
+  // ---- FFT sampling (same DSP as original) ----
+  microseconds = micros();
+  for (int i = 0; i < samples; i++) {
+    vReal[i] = tmpPacketCounter * 300;
+    vImag[i] = 1;
+    while (micros() - microseconds < sampling_period_us) { }
+    microseconds += sampling_period_us;
+  }
+
+  double mean = 0;
+  for (uint16_t i = 0; i < samples; i++) mean += vReal[i];
+  mean /= samples;
+  for (uint16_t i = 0; i < samples; i++) vReal[i] -= mean;
+
+  FFT.Windowing(vReal, samples, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+  FFT.Compute(vReal, vImag, samples, FFT_FORWARD);
+  FFT.ComplexToMagnitude(vReal, vImag, samples);
+
+  // ---- Compute new row into circular buffer ----
+  Adafruit_SSD1306 *oled = tft.oled();
+  if (!oled) return;
+
+  const int bins = samples >> 1;  // typically 128
+  uint8_t *rowBuf = s_fftBuf[s_fftWriteIdx];
+  memset(rowBuf, 0, kOledGraphW / 8);
+
+  int max_k = 0;
+  for (int x = 0; x < kOledGraphW; x++) {
+    // Map OLED column x to FFT bin. If bins >= 128 (1:1), use direct mapping.
+    // Otherwise stretch/shrink to fit.
+    int binIdx = (bins >= kOledGraphW) ? x : (x * bins) / kOledGraphW;
+    if (binIdx >= bins) binIdx = bins - 1;
+    int k = (int)(vReal[binIdx] / attenuation);
+    if (k > max_k) max_k = k;
+    if (k > 127) k = 127;
+    if (k > kOledThreshold) {
+      rowBuf[x / 8] |= (1 << (x & 7));
+    }
+  }
+
+  // Auto-attenuation (same as original).
+  double tattenuation = max_k / 127.0;
+  if (tattenuation > attenuation) attenuation = tattenuation;
+
+  s_fftWriteIdx = (s_fftWriteIdx + 1) % kOledGraphH;
+
+  // ---- Redraw graph area from circular buffer ----
+  // Oldest row is at s_fftWriteIdx (we just advanced past it). Walk forward
+  // from there so the newest row ends up at the bottom of the graph.
+  // drawFastHLine / drawPixel write to the SSD1306 RAM buffer only — no I2C
+  // transfer until display() is called.
+  for (int y = 0; y < kOledGraphH; y++) {
+    int bufIdx = (s_fftWriteIdx + y) % kOledGraphH;
+    uint8_t *row = s_fftBuf[bufIdx];
+    int oledY = kOledGraphTop + y;
+    oled->drawFastHLine(0, oledY, kOledGraphW, SSD1306_BLACK);
+    for (int x = 0; x < kOledGraphW; x++) {
+      if (row[x / 8] & (1 << (x & 7))) {
+        oled->drawPixel(x, oledY, SSD1306_WHITE);
+      }
+    }
+  }
+
+  // ---- Draw info header on top of the OLED (y=8..18) ----
+  // Show channel + packet count + deauth count so the user can see the
+  // scanner is actually running (not a frozen screen). Use the SSD1306
+  // text API directly (Adafruit_GFX size=1, 6x8 px font).
+  {
+    char info[24];
+    snprintf(info, sizeof(info), "Ch:%d Pkt:%lu D:%lu",
+             ch, (unsigned long)tmpPacketCounter, (unsigned long)deauths);
+    oled->fillRect(0, 8, kOledGraphW, 11, SSD1306_BLACK);   // clear header
+    oled->setTextSize(1);
+    oled->setTextColor(SSD1306_WHITE);
+    oled->setCursor(0, 9);
+    oled->print(info);
+  }
+  // Single I2C transfer for the whole frame.
+  oled->display();
+#else
   microseconds = micros();
 
   for (int i = 0; i < samples; i++) {
@@ -503,6 +623,7 @@ void do_sampling_FFT() {
   tft.print(tmpPacketCounter);
 
   delay(10);
+#endif   // BOARD_ESP32_WROOM_OLED
 }
 
 esp_err_t event_handler(void* ctx, system_event_t* event) {
@@ -818,7 +939,7 @@ void ptmLoop() {
     }
   }
 
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
 
     esp_wifi_set_promiscuous(false);
     if (pcapPacketsWritten || pcapDropped) {
@@ -1437,7 +1558,7 @@ void beaconSpamSetup() {
 
 void beaconSpamLoop() {
 
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
     feature_exit_requested = true;
     return;
   }
@@ -1515,7 +1636,7 @@ void beaconSpamLoop() {
 
 namespace DeauthDetect {
 
-#define LINE_HEIGHT 12
+#define LINE_HEIGHT ESP32DIV_LINE_HEIGHT
 static constexpr int DEAUTH_TERM_CAPACITY = 24;
 
 static int deauthVisibleLines() {
@@ -1954,7 +2075,7 @@ void deauthdetectSetup() {
 
 void deauthdetectLoop() {
 
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
     stopScan = true;
     exitMode = true;
   }
@@ -2164,9 +2285,9 @@ const unsigned long debounceTime = 200;
 #define MAX_SSID_LENGTH 10
 
 // Deauther-like list geometry (bigger rows + paging + bottom tab bar).
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 
 static int wifiNetworksPerPage() {
   return max(1, (wifiListBottomY() - LIST_FIRST_ROW_Y) / LIST_ROW_H);
@@ -2225,6 +2346,38 @@ static void drawNetworkRow(int i, int y, bool isSel) {
   char buf[64];
   char ssid[16];
   String fullSSID = WiFi.SSID(i);
+
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: 128 px wide / 6 px per char ≈ 21 chars per line. LIST_ROW_H is
+  // 50 source-px = 10 OLED-px, so we only have ONE 8-px-tall text line per
+  // row (no room for a 2-line layout). We pack the essential info on one
+  // line: index + truncated SSID + signal + channel.
+  strncpy(ssid, fullSSID.c_str(), 9);
+  ssid[9] = '\0';
+  if (fullSSID.length() > 9) {
+    ssid[6] = '.'; ssid[7] = '.'; ssid[8] = '.';   // "MySSID..."
+  }
+
+  const int rssi = WiFi.RSSI(i);
+  const int ch = WiFi.channel(i);
+  const int auth = WiFi.encryptionType(i);
+  // "01:MySSID.. -75 Ch6" — 19 chars ≈ 114 px (fits 128)
+  // For OPEN networks we prefix with '*' so they're easy to spot.
+  snprintf(buf, sizeof(buf), "%c%02d:%s %d Ch%d",
+           (auth == WIFI_AUTH_OPEN) ? '*' : ' ',
+           i + 1, ssid, rssi, ch);
+
+  // Clear only this row (avoid overlapping next row).
+  tft.fillRect(0, y, SCREEN_WIDTH, LIST_ROW_H, TFT_BLACK);
+
+  tft.setCursor(2, y);
+  tft.setTextColor(isSel ? ORANGE : FEATURE_BG);
+  tft.print(isSel ? ">" : " ");
+
+  tft.setCursor(10, y);
+  tft.setTextColor(isSel ? ORANGE : (auth == WIFI_AUTH_OPEN ? ORANGE : WHITE));
+  tft.println(buf);
+#else
   strncpy(ssid, fullSSID.c_str(), 11);
   ssid[11] = '\0';
   if (fullSSID.length() > 11) strcat(ssid, "...");
@@ -2245,6 +2398,7 @@ static void drawNetworkRow(int i, int y, bool isSel) {
   tft.setCursor(10, y);
   tft.setTextColor(isSel ? ORANGE : (auth == WIFI_AUTH_OPEN ? ORANGE : WHITE));
   tft.println(buf);
+#endif
 }
 
 void displayWiFiList(bool fullRedraw = false) {
@@ -2263,7 +2417,12 @@ void displayWiFiList(bool fullRedraw = false) {
     tft.println("No networks found.");
     tft.setCursor(10, LIST_HEADER_Y + 12);
     tft.println("Press Rescan.");
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // OLED: BTN_SELECT triggers a rescan; BTN_LEFT exits.
+    esp32divDrawScannerFooter("Sel:Scan", "L:Exit", 0);
+#else
     drawTabBar("Rescan", false, "Prev", true, "Next", true);
+#endif
     return;
   }
 
@@ -2292,14 +2451,25 @@ void displayWiFiList(bool fullRedraw = false) {
 
     int y = LIST_FIRST_ROW_Y;
     const int end_index = min(listStartIndex + wifiNetworksPerPage(), networkCount);
+    int drawnRows = 0;
     for (int i = listStartIndex; i < end_index && y < wifiListBottomY(); i++) {
       drawNetworkRow(i, y, (i == currentIndex));
       y += LIST_ROW_H;
+      drawnRows++;
     }
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // OLED-aware scrollbar on the right edge whenever the list overflows.
+    // visibleCount = drawnRows, totalCount = networkCount.
+    esp32divDrawListScrollbar(drawnRows, networkCount, listStartIndex);
+    // OLED-aware 2-button footer: "Sel:Open" / "R:Next".
+    // BTN_LEFT exits (handled by featureExitButtonPressed in wifiscanLoop).
+    esp32divDrawScannerFooter("Sel:Open", "R:Next", 0);
+#else
     const bool prevDisabled = (current_page == 0);
     const bool nextDisabled = ((current_page + 1) * wifiNetworksPerPage() >= networkCount);
     drawTabBar("Rescan", false, "Prev", prevDisabled, "Next", nextDisabled);
+#endif
     last_rendered_page = current_page;
     last_rendered_index = currentIndex;
     return;
@@ -2460,6 +2630,7 @@ void handleButton() {
 
   bool updated = false;
   int oldPage = current_page;
+  const int networkCount = WiFi.scanComplete();
 
   if (isButtonPressed(BTN_UP)) {
     if (!isDetailView && currentIndex > 0) {
@@ -2472,7 +2643,7 @@ void handleButton() {
   }
 
   if (isButtonPressed(BTN_DOWN)) {
-    if (!isDetailView && currentIndex < WiFi.scanComplete() - 1) {
+    if (!isDetailView && currentIndex < networkCount - 1) {
       currentIndex++;
       delay(200);
       current_page = currentIndex / max(1, wifiNetworksPerPage());
@@ -2481,6 +2652,39 @@ void handleButton() {
     lastButtonPress = currentMillis;
   }
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // On the OLED board there is no touch. BTN_RIGHT advances pages (or opens
+  // details when in detail view), BTN_SELECT opens details / triggers rescan,
+  // BTN_LEFT exits (handled by featureExitButtonPressed() in wifiscanLoop).
+  if (isButtonPressed(BTN_RIGHT)) {
+    delay(200);
+    if (isDetailView) {
+      isDetailView = false;
+      updated = true;
+    } else if (networkCount > 0) {
+      const int totalPages = (networkCount + wifiNetworksPerPage() - 1) / wifiNetworksPerPage();
+      current_page++;
+      if (current_page >= totalPages) current_page = 0;  // wrap to first page
+      currentIndex = current_page * wifiNetworksPerPage();
+      updated = true;
+    }
+    lastButtonPress = currentMillis;
+  }
+
+  if (isButtonPressed(BTN_SELECT)) {
+    delay(200);
+    if (isDetailView) {
+      isDetailView = false;
+    } else if (networkCount > 0) {
+      isDetailView = true;
+    } else {
+      // Empty list — SELECT triggers a rescan.
+      startWiFiScan();
+    }
+    updated = true;
+    lastButtonPress = currentMillis;
+  }
+#else
   if (isButtonPressed(BTN_RIGHT)) {
     delay(200);
     if (!isScanning) {
@@ -2500,6 +2704,7 @@ void handleButton() {
     updated = true;
     lastButtonPress = currentMillis;
   }
+#endif
 
   if (updated) {
     if (isDetailView) displayWiFiDetails();
@@ -2679,7 +2884,7 @@ void wifiscanSetup() {
 
 void wifiscanLoop() {
 
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && featureExitButtonPressed()) {
     feature_exit_requested = true;
     return;
   }
@@ -2730,7 +2935,13 @@ static int s_cloneLastRenderedSel = -1;
 static bool s_cloneLastPrevEn = false;
 static bool s_cloneLastNextEn = false;
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+// OLED: row height must be 50 source-px (= 10 OLED-px) to fit 8-px-tall text.
+// Original 22 source-px (= 4.4 OLED-px) caused heavy overlap.
+static constexpr int CP_CLONE_ROW_H = 50;
+#else
 static constexpr int CP_CLONE_ROW_H = 22;
+#endif
 static constexpr int CP_CLONE_HINT_H = 12;
 static constexpr int CP_CLONE_HEADER_BLOCK_H = 28;
 
@@ -3305,8 +3516,20 @@ static void cpCloneDrawRow(int displayNum, const String& ssid, int rssi, int ch,
 
   const char* enc = (auth == WIFI_AUTH_OPEN) ? "OPEN" : "WPA2";
   char buf[64];
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: shorten the format so it fits on one 128-px line.
+  // "*01:MySSID.. -75 Ch6" — 19 chars ≈ 114 px (fits 128)
+  // '*' marks OPEN networks (no encryption).
+  if (strlen(ssidBuf) > 9) {
+    ssidBuf[6] = '.'; ssidBuf[7] = '.'; ssidBuf[8] = '.'; ssidBuf[9] = '\0';
+  }
+  snprintf(buf, sizeof(buf), "%c%02d:%s %d Ch%d",
+           (auth == WIFI_AUTH_OPEN) ? '*' : ' ',
+           displayNum, ssidBuf, rssi, ch);
+#else
   snprintf(buf, sizeof(buf), "%02d: %-15s %3d dBm Ch%2d %s",
            displayNum, ssidBuf, rssi, ch, enc);
+#endif
 
   tft.fillRect(0, y, tft.width(), CP_CLONE_ROW_H, TFT_BLACK);
   tft.setCursor(2, y);
@@ -4173,7 +4396,7 @@ void cportalSetup() {
 
 void cportalLoop() {
 
-  if (feature_active && (feature_exit_requested || isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (feature_exit_requested || featureExitButtonPressed())) {
     cportalTeardown();
     feature_exit_requested = true;
     return;
@@ -4211,9 +4434,9 @@ static unsigned long deautherLastButtonPress = 0;
 static const unsigned long deautherDebounceTime = 200;
 
 // Larger row height = easier touch selection.
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 
 static int deautherNetworksPerPage() {
   return max(1, (wifiListBottomY() - LIST_FIRST_ROW_Y) / LIST_ROW_H);
@@ -4269,8 +4492,16 @@ static void deautherDrawApRow(int i, int y, bool isSel) {
     strcat(ssid, "...");
   }
   const char* enc = ap_list[i].authmode == WIFI_AUTH_OPEN ? "OPEN" : "WPA2";
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: shorten so the row fits on one 128-px line.
+  if (strlen(ssid) > 9) { ssid[6] = '.'; ssid[7] = '.'; ssid[8] = '.'; ssid[9] = '\0'; }
+  snprintf(buf, sizeof(buf), "%c%02d:%s %d Ch%d",
+           (ap_list[i].authmode == WIFI_AUTH_OPEN) ? '*' : ' ',
+           i + 1, ssid, ap_list[i].rssi, ap_list[i].primary);
+#else
   snprintf(buf, sizeof(buf), "%02d: %-15s %3d dBm Ch%2d %s",
            i + 1, ssid, ap_list[i].rssi, ap_list[i].primary, enc);
+#endif
 
   tft.fillRect(0, y, SCREEN_WIDTH, LIST_ROW_H, TFT_BLACK);
   tft.setCursor(2, y);
@@ -4787,10 +5018,26 @@ void deautherSetup() {
 
 void deautherLoop() {
 
-    if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+#if !defined(BOARD_ESP32_WROOM_OLED)
+    // On non-OLED boards, BTN_LEFT is the legacy "toggle attack" button.
+    // On OLED boards, BTN_LEFT is the dedicated BACK button and is handled
+    // by deautherHandleNavButtons() below using BTN_RIGHT for back instead.
+    if (feature_active && (featureExitButtonPressed())) {
         feature_exit_requested = true;
         return;
     }
+#else
+    // On OLED, only exit if BTN_LEFT is pressed AND we're not in the
+    // attack-running screen (where BTN_LEFT toggles the attack on/off).
+    // When the attack screen is shown (selected_ap_index >= 0), BTN_LEFT
+    // is consumed by deautherHandleNavButtons() to toggle the attack —
+    // exit only happens via BTN_RIGHT (which deautherOpenTarget uses to
+    // pop back to the scan list, then BTN_LEFT from the scan list exits).
+    if (feature_active && featureExitButtonPressed() && selected_ap_index == -1 && !attack_running) {
+        feature_exit_requested = true;
+        return;
+    }
+#endif
 
     tft.drawFastHLine(0, 19, 240, UI_LINE);
 
@@ -4861,9 +5108,9 @@ namespace ProbeRequestFlood {
 #define SCREEN_HEIGHT 320
 
 // Larger row height = easier touch selection.
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 
 static unsigned long probeLastButtonPress = 0;
 static const unsigned long probeDebounceTime = 200;
@@ -4914,8 +5161,16 @@ static void probeDrawApRow(int i, int y, bool isSel) {
     strcat(ssid, "...");
   }
   const char* enc = ap_list[i].authmode == WIFI_AUTH_OPEN ? "OPEN" : "WPA2";
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: shorten so the row fits on one 128-px line.
+  if (strlen(ssid) > 9) { ssid[6] = '.'; ssid[7] = '.'; ssid[8] = '.'; ssid[9] = '\0'; }
+  snprintf(buf, sizeof(buf), "%c%02d:%s %d Ch%d",
+           (ap_list[i].authmode == WIFI_AUTH_OPEN) ? '*' : ' ',
+           i + 1, ssid, ap_list[i].rssi, ap_list[i].primary);
+#else
   snprintf(buf, sizeof(buf), "%02d: %-15s %3d dBm Ch%2d %s",
            i + 1, ssid, ap_list[i].rssi, ap_list[i].primary, enc);
+#endif
 
   tft.fillRect(0, y, SCREEN_WIDTH, LIST_ROW_H, TFT_BLACK);
   tft.setCursor(2, y);
@@ -5475,10 +5730,21 @@ void probeRequestFloodSetup() {
 
 void probeRequestFloodLoop() {
 
-    if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+#if !defined(BOARD_ESP32_WROOM_OLED)
+    if (feature_active && (featureExitButtonPressed())) {
         feature_exit_requested = true;
         return;
     }
+#else
+    // On OLED, BTN_LEFT is the dedicated BACK button. While a target is
+    // selected (selected_ap_index >= 0), BTN_LEFT toggles the attack
+    // (handled by probeHandleNavButtons). Exit only happens when the user
+    // is on the scan list (selected_ap_index == -1) and presses BTN_LEFT.
+    if (feature_active && featureExitButtonPressed() && selected_ap_index == -1 && !attack_running) {
+        feature_exit_requested = true;
+        return;
+    }
+#endif
 
     tft.drawFastHLine(0, 19, 240, UI_LINE);
 
@@ -5552,9 +5818,9 @@ namespace HiddenSsidReveal {
 #define ICON_SIZE 16
 #define ICON_NUM 2
 
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 static constexpr int MAX_HIDDEN_APS = 40;
 static constexpr unsigned long LISTEN_HOP_MS = 1500;
 static constexpr unsigned long BTN_DEBOUNCE_MS = 200;
@@ -5944,8 +6210,16 @@ static void drawApRow(int i, int y, bool isSel) {
   }
 
   const char* tag = s_aps[i].has_name ? "OK" : "??";
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: shorten so the row fits on one 128-px line.
+  if (strlen(name) > 9) { name[6] = '.'; name[7] = '.'; name[8] = '.'; name[9] = '\0'; }
+  snprintf(buf, sizeof(buf), "%c%02d:%s %d Ch%d",
+           s_aps[i].has_name ? ' ' : '?',
+           i + 1, name, s_aps[i].rssi, s_aps[i].channel);
+#else
   snprintf(buf, sizeof(buf), "%02d: %-14s %3d Ch%2d %s",
            i + 1, name, s_aps[i].rssi, s_aps[i].channel, tag);
+#endif
 
   tft.fillRect(0, y, SCREEN_WIDTH, LIST_ROW_H, TFT_BLACK);
   tft.setCursor(2, y);
@@ -6350,11 +6624,21 @@ static void handleNavButtons() {
   const bool onReveal = (s_selectedIndex >= 0 || s_listenAll);
 
   if (onReveal) {
+#if !defined(BOARD_ESP32_WROOM_OLED)
     if (isButtonPressedEdge(BTN_LEFT)) {
       toggleForce();
       s_lastBtnMs = now;
       return;
     }
+#else
+    // On OLED, BTN_LEFT is BACK (handled by featureExitButtonPressed at top
+    // of hiddenSsidLoop). Use BTN_SELECT to toggle force mode instead.
+    if (isButtonPressedEdge(BTN_SELECT)) {
+      toggleForce();
+      s_lastBtnMs = now;
+      return;
+    }
+#endif
     if (isButtonPressedEdge(BTN_UP) && !s_listening) {
       startListening(false);
       updateRevealStats();
@@ -6379,12 +6663,22 @@ static void handleNavButtons() {
     return;
   }
 
+#if !defined(BOARD_ESP32_WROOM_OLED)
   if (isButtonPressedEdge(BTN_LEFT)) {
     scanHiddenNetworks();
     drawScanScreen(true);
     s_lastBtnMs = now;
     return;
   }
+#else
+  // On OLED, BTN_SELECT triggers a rescan (BTN_LEFT is BACK).
+  if (isButtonPressedEdge(BTN_SELECT)) {
+    scanHiddenNetworks();
+    drawScanScreen(true);
+    s_lastBtnMs = now;
+    return;
+  }
+#endif
   if (isButtonPressedEdge(BTN_UP) && s_currentIndex > 0) {
     s_currentIndex--;
     drawScanScreen(false);
@@ -6625,7 +6919,7 @@ void hiddenSsidLoop() {
     return;
   }
 
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
     teardown();
     feature_exit_requested = true;
     return;
@@ -6678,9 +6972,9 @@ namespace WpsScanner {
 #define ICON_SIZE 16
 #define ICON_NUM 2
 
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 static constexpr int MAX_WPS_APS = 48;
 static constexpr unsigned long BTN_DEBOUNCE_MS = 200;
 
@@ -6794,9 +7088,16 @@ static void drawApRow(int i, int y, bool isSel) {
     snprintf(name, sizeof(name), "(hidden)");
   }
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: shorten so the row fits on one 128-px line.
+  if (strlen(name) > 9) { name[6] = '.'; name[7] = '.'; name[8] = '.'; name[9] = '\0'; }
+  snprintf(buf, sizeof(buf), "%02d:%s %d Ch%d",
+           i + 1, name, (int)s_aps[i].rssi, (int)s_aps[i].channel);
+#else
   snprintf(buf, sizeof(buf), "%02d: %-14s %3d Ch%2d %s",
            i + 1, name, (int)s_aps[i].rssi, (int)s_aps[i].channel,
            authShort(s_aps[i].authmode));
+#endif
 
   tft.fillRect(0, y, SCREEN_WIDTH, LIST_ROW_H, TFT_BLACK);
   tft.setCursor(2, y);
@@ -6962,10 +7263,25 @@ static void handleNavButtons() {
   }
 
   if (isButtonPressedEdge(BTN_LEFT)) {
+#if !defined(BOARD_ESP32_WROOM_OLED)
+    runScan();
+    s_lastBtnMs = now;
+    return;
+#else
+    // On OLED, BTN_LEFT is BACK (exit). Skip the rescan trigger.
+    s_lastBtnMs = now;
+    return;
+#endif
+  }
+
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // On OLED, BTN_SELECT triggers a rescan.
+  if (isButtonPressedEdge(BTN_SELECT)) {
     runScan();
     s_lastBtnMs = now;
     return;
   }
+#endif
 
   const int perPage = networksPerPage();
   if (isButtonPressedEdge(BTN_DOWN)) {
@@ -7122,7 +7438,7 @@ void wpsScannerLoop() {
     teardown();
     return;
   }
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
     teardown();
     feature_exit_requested = true;
     return;
@@ -7150,9 +7466,9 @@ namespace ArpScanner {
 #define ICON_SIZE 16
 #define ICON_NUM 2
 
-static constexpr int LIST_HEADER_Y = 50;
-static constexpr int LIST_FIRST_ROW_Y = LIST_HEADER_Y + 20;
-static constexpr int LIST_ROW_H = 22;
+static constexpr int LIST_HEADER_Y = ESP32DIV_LIST_HEADER_Y;
+static constexpr int LIST_FIRST_ROW_Y = ESP32DIV_LIST_FIRST_ROW_Y;
+static constexpr int LIST_ROW_H = ESP32DIV_LIST_ROW_H;
 static constexpr int MAX_APS = 40;
 static constexpr int MAX_HOSTS = 64;
 static constexpr unsigned long BTN_DEBOUNCE_MS = 200;
@@ -7359,6 +7675,20 @@ static void drawApRow(int i, int y, bool isSel) {
   tft.setTextColor(isSel ? ORANGE : FEATURE_BG, TFT_BLACK);
   tft.print(isSel ? ">" : " ");
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: there isn't enough horizontal room for both left (idx+name) and
+  // right (rssi+ch+auth) columns on one 128-px line. Show a single compact
+  // line: "01:MySSID -75 Ch6" — keeps the essentials visible without overlap.
+  {
+    char compact[40];
+    if (strlen(name) > 9) { name[6] = '.'; name[7] = '.'; name[8] = '.'; name[9] = '\0'; }
+    snprintf(compact, sizeof(compact), "%02d:%s %d Ch%u",
+             i + 1, name, (int)s_aps[i].rssi, (unsigned)s_aps[i].channel);
+    tft.setCursor(10, y);
+    tft.setTextColor(isSel ? ORANGE : WHITE, TFT_BLACK);
+    tft.print(compact);
+  }
+#else
   const bool openNet = (s_aps[i].authmode == WIFI_AUTH_OPEN);
   const uint16_t fg = isSel ? ORANGE : (openNet ? ORANGE : WHITE);
   const int rightW = tft.textWidth(right);
@@ -7370,6 +7700,7 @@ static void drawApRow(int i, int y, bool isSel) {
 
   tft.setCursor(rightX, y);
   tft.print(right);
+#endif
 }
 
 static void drawHostRow(int i, int y, bool isSel) {
@@ -7388,6 +7719,15 @@ static void drawHostRow(int i, int y, bool isSel) {
   tft.setTextColor(isSel ? ORANGE : FEATURE_BG, TFT_BLACK);
   tft.print(isSel ? ">" : " ");
 
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // OLED: there isn't enough room for both IP and MAC on one 128-px line.
+  // Drop the MAC (the user can see it in the detail view) and show only
+  // "01: 192.168.1.10" which fits comfortably.
+  (void)mac;
+  tft.setTextColor(isSel ? ORANGE : WHITE, TFT_BLACK);
+  tft.setCursor(COL_LEFT_X, y);
+  tft.print(left);
+#else
   const int macW = tft.textWidth(mac);
   const int macX = SCREEN_WIDTH - COL_RIGHT_MARGIN - macW;
 
@@ -7398,6 +7738,7 @@ static void drawHostRow(int i, int y, bool isSel) {
   tft.setTextColor(isSel ? ORANGE : UI_DIM_TEXT, TFT_BLACK);
   tft.setCursor(macX, y);
   tft.print(mac);
+#endif
 }
 
 static void drawListCommon(bool fullRedraw, int count, const char* header,
@@ -7583,7 +7924,7 @@ static bool connectToAp(const ApEntry& ap, const char* password) {
 
   const uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
-    if (feature_exit_requested || isButtonPressed(BTN_SELECT) || featureExitButtonPressed()) {
+    if (feature_exit_requested || featureExitButtonPressed()) {
       WiFi.disconnect(true, true);
       return false;
     }
@@ -7822,6 +8163,27 @@ static void handleNavButtons() {
   const int count = (s_phase == Phase::ApList) ? s_apCount : s_hostCount;
 
   if (isButtonPressedEdge(BTN_LEFT)) {
+#if defined(BOARD_ESP32_WROOM_OLED)
+    // On OLED, BTN_LEFT is the dedicated BACK button (handled by
+    // featureExitButtonPressed() at top of arpScannerLoop). Skip the rescan
+    // trigger here so the user can exit cleanly.
+    s_lastBtnMs = now;
+    return;
+#else
+    if (s_phase == Phase::ApList) {
+      scanAccessPoints();
+    } else {
+      runArpSweep();
+    }
+    s_lastBtnMs = now;
+    return;
+#endif
+  }
+
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // On OLED, BTN_SELECT takes over the rescan/sweep action that BTN_LEFT
+  // used to perform on TFT boards.
+  if (isButtonPressedEdge(BTN_SELECT)) {
     if (s_phase == Phase::ApList) {
       scanAccessPoints();
     } else {
@@ -7830,6 +8192,7 @@ static void handleNavButtons() {
     s_lastBtnMs = now;
     return;
   }
+#endif
 
   if (isButtonPressedEdge(BTN_RIGHT)) {
     if (s_phase == Phase::ApList) {
@@ -8005,7 +8368,7 @@ void arpScannerLoop() {
     teardown();
     return;
   }
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
     teardown();
     feature_exit_requested = true;
     return;
@@ -8032,7 +8395,7 @@ namespace KarmaAttack {
 #define STATUS_BAR_HEIGHT 16
 #define ICON_SIZE 16
 #define ICON_NUM 2
-#define LINE_HEIGHT 12
+#define LINE_HEIGHT ESP32DIV_LINE_HEIGHT
 
 static constexpr int TERM_CAPACITY = 24;
 static constexpr int CARDS_Y = 42;
@@ -9192,7 +9555,7 @@ void karmaLoop() {
     teardown();
     return;
   }
-  if (feature_active && (isButtonPressed(BTN_SELECT) || featureExitButtonPressed())) {
+  if (feature_active && (featureExitButtonPressed())) {
     teardown();
     feature_exit_requested = true;
     return;

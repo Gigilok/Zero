@@ -944,4 +944,33 @@ extern bool submenu_initialized;
 extern bool is_main_menu;
 extern bool feature_exit_requested;
 
+/*──────────────────── OLED-aware list-row layout ────────────────────*/
+// On the 128x64 OLED, the original 240x320 layout's `LIST_ROW_H = 22` source-px
+// scales to only 4 OLED-px (22 * 64/320 = 4.4), but text rendered at size=1
+// is 8 OLED-px tall → rows heavily overlapped ("letras desenhando encima
+// das outras"). The user reports this in WiFi / Bluetooth / Deauther /
+// Probe / WPS / ARP scanner lists.
+//
+// To fix it cleanly across every scanner without touching each scanner's
+// layout logic, we centralize the OLED-aware constants here and have each
+// scanner use ESP32DIV_LIST_ROW_H / ESP32DIV_LIST_HEADER_Y /
+// ESP32DIV_LIST_FIRST_ROW_Y instead of hard-coding 22 / 50 / 70.
+//
+// On OLED: row height = 50 source-px = 10 OLED-px (8 px font + 2 px gap),
+// header Y = 30 source-px = 6 OLED-px (just below the 4-px status bar),
+// first row Y = 50 source-px = 10 OLED-px. With the visible list area
+// 10..60 OLED-px (= 50..300 source-px) we get 5 readable rows per page,
+// each clearly separated from the next.
+#if defined(BOARD_ESP32_WROOM_OLED)
+  #define ESP32DIV_LIST_ROW_H        50    // source-px (= 10 OLED-px)
+  #define ESP32DIV_LIST_HEADER_Y     30    // source-px (= 6  OLED-px)
+  #define ESP32DIV_LIST_FIRST_ROW_Y  50    // source-px (= 10 OLED-px)
+  #define ESP32DIV_LINE_HEIGHT       40    // source-px (= 8  OLED-px) — log rows
+#else
+  #define ESP32DIV_LIST_ROW_H        22
+  #define ESP32DIV_LIST_HEADER_Y     50
+  #define ESP32DIV_LIST_FIRST_ROW_Y  70    // = LIST_HEADER_Y + 20
+  #define ESP32DIV_LINE_HEIGHT       12
+#endif
+
 #endif

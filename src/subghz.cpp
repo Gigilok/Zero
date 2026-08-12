@@ -1027,6 +1027,111 @@ void sendSignal() {
 }
 
 void do_sampling() {
+#if defined(BOARD_ESP32_WROOM_OLED)
+  // -----------------------------------------------------------------------
+  // OLED-native FFT waterfall (BOARD_ESP32_WROOM_OLED only).
+  // -----------------------------------------------------------------------
+  // The original TFT code draws a colored waterfall by calling tft.drawPixel
+  // 256 times per FFT frame, advancing 1 source-px (0.2 OLED px) per iteration.
+  // On the 128x64 1-bit OLED this fails two ways:
+  //   1. 4 out of 5 rows overwrite the same OLED pixel row (only every 5th
+  //      iteration lands on a new Y) → graph appears as a thin smear at top.
+  //   2. Each tft.drawPixel() triggers a full 1024-byte I2C framebuffer
+  //      flush (~10ms), so 256 pixels = ~2.5s per frame → unusable.
+  //
+  // This OLED-specific implementation:
+  //   * Renders directly to the SSD1306 framebuffer via tft.oled()->drawPixel
+  //     (no auto-flush — only one display() call per frame).
+  //   * Uses a circular buffer of kOledGraphH rows × 128 cols (640 bytes)
+  //     so the waterfall scrolls cleanly without affecting the status bar.
+  //   * Thresholds magnitude to 1-bit (signal present / absent) since the
+  //     OLED panel has no color.
+  //   * Graph area: x=0..127, y=20..59 (40 px tall, below the 20-px header
+  //     which holds Freq/Bit/RSSI/Ptc/Val labels).
+  // -----------------------------------------------------------------------
+  constexpr int kOledGraphTop    = 20;
+  constexpr int kOledGraphH      = 40;  // y=20..59
+  constexpr int kOledGraphW      = 128;
+  constexpr int kOledThreshold   = 32;  // magnitude threshold for 1-bit ON
+
+  static uint8_t s_fftBuf[kOledGraphH][kOledGraphW / 8];  // 640 bytes
+  static int     s_fftWriteIdx = 0;
+  static bool    s_fftBufInited = false;
+  if (!s_fftBufInited) {
+    memset(s_fftBuf, 0, sizeof(s_fftBuf));
+    s_fftBufInited = true;
+  }
+
+  // ---- FFT sampling (same DSP as original) ----
+  micro_s = micros();
+  #define ALPHA 0.2
+  float ewmaRSSI = -50;
+  for (int i = 0; i < samplesSUB; i++) {
+    int rssi = ELECHOUSE_cc1101.getRssi();
+    rssi += 100;
+    ewmaRSSI = (ALPHA * rssi) + ((1 - ALPHA) * ewmaRSSI);
+    vRealSUB[i] = ewmaRSSI * 2;
+    vImagSUB[i] = 1;
+    while (micros() < micro_s + sampling_period);
+    micro_s += sampling_period;
+  }
+
+  double mean = 0;
+  for (uint16_t i = 0; i < samplesSUB; i++) mean += vRealSUB[i];
+  mean /= samplesSUB;
+  for (uint16_t i = 0; i < samplesSUB; i++) vRealSUB[i] -= mean;
+
+  FFTSUB.Windowing(vRealSUB, samplesSUB, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+  FFTSUB.Compute(vRealSUB, vImagSUB, samplesSUB, FFT_FORWARD);
+  FFTSUB.ComplexToMagnitude(vRealSUB, vImagSUB, samplesSUB);
+
+  // ---- Compute new row into circular buffer ----
+  Adafruit_SSD1306 *oled = tft.oled();
+  if (!oled) return;
+
+  const int bins = samplesSUB >> 1;  // 128
+  uint8_t *rowBuf = s_fftBuf[s_fftWriteIdx];
+  memset(rowBuf, 0, kOledGraphW / 8);
+
+  int max_k = 0;
+  for (int x = 0; x < kOledGraphW; x++) {
+    // Map OLED column x to FFT bin. Both are 128, so 1:1 mapping.
+    int binIdx = x;
+    if (binIdx >= bins) binIdx = bins - 1;
+    int k = (int)(vRealSUB[binIdx] / attenuation_num);
+    if (k > max_k) max_k = k;
+    if (k > 127) k = 127;
+    if (k > kOledThreshold) {
+      rowBuf[x / 8] |= (1 << (x & 7));
+    }
+  }
+
+  // Auto-attenuation (same as original)
+  double tattenuation = max_k / 127.0;
+  if (tattenuation > attenuation_num)
+    attenuation_num = tattenuation;
+
+  s_fftWriteIdx = (s_fftWriteIdx + 1) % kOledGraphH;
+
+  // ---- Redraw graph area from circular buffer ----
+  // Oldest row is at s_fftWriteIdx (we just advanced past it). Walk forward
+  // from there so the newest row ends up at the bottom of the graph.
+  // drawFastHLine / drawPixel write to the SSD1306 RAM buffer only — no I2C
+  // transfer until display() is called.
+  for (int y = 0; y < kOledGraphH; y++) {
+    int bufIdx = (s_fftWriteIdx + y) % kOledGraphH;
+    uint8_t *row = s_fftBuf[bufIdx];
+    int oledY = kOledGraphTop + y;
+    oled->drawFastHLine(0, oledY, kOledGraphW, SSD1306_BLACK);
+    for (int x = 0; x < kOledGraphW; x++) {
+      if (row[x / 8] & (1 << (x & 7))) {
+        oled->drawPixel(x, oledY, SSD1306_WHITE);
+      }
+    }
+  }
+  // Single I2C transfer for the whole frame.
+  oled->display();
+#else
   constexpr unsigned int kGraphYOffset = 81;
   const int plotY = (int)epochSUB + (int)kGraphYOffset;
   if (plotY >= subghzContentBottom()) {
@@ -1098,6 +1203,7 @@ for (int j = 0; j < samplesSUB >> 1; j++) {
     attenuation_num = tattenuation;
 
     delay(10);
+#endif
 }
 
 void readProfileCount() {
@@ -1503,10 +1609,19 @@ void ReplayAttackLoop() {
         replayFreqNext();
         lastDebounceTime = millis();
     }
+#if !defined(BOARD_ESP32_WROOM_OLED)
+    // On OLED, BTN_LEFT is the dedicated BACK button (handled by
+    // featureExitButtonPressed() at the top of this loop). Don't overload
+    // it with "previous frequency" — that makes BACK feel broken because
+    // a quick tap changes frequency instead of exiting. On TFT boards with
+    // touch nav, BTN_LEFT is the touch-nav "prev freq" slot (handled in
+    // replayHandleNavButtons), so this physical-button mapping is only
+    // needed on non-OLED boards.
     if (leftPressed && !prevLeft && millis() - lastDebounceTime > debounceDelay) {
         replayFreqPrev();
         lastDebounceTime = millis();
     }
+#endif
     if (upPressed && !prevUp && receivedValue != 0 && millis() - lastDebounceTime > debounceDelay) {
         autoScanEnabled = false;
         replayClearScanLock();
@@ -2296,10 +2411,16 @@ void saveLoop() {
             lastDebounceTime = millis();
         }
 
+#if !defined(BOARD_ESP32_WROOM_OLED)
+        // On OLED, BTN_LEFT is the dedicated BACK button (handled by
+        // featureExitButtonPressed() at the top of saveLoop). Don't overload
+        // it with "delete profile" — that makes BACK feel broken because a
+        // quick tap deletes the selected profile instead of exiting.
         if (deletePressed && !prevLeft && millis() - lastDebounceTime > debounceDelay) {
             deleteProfile(currentProfileIndex);
             lastDebounceTime = millis();
         }
+#endif
     }
 
     prevUp = prevPressed;
@@ -2812,9 +2933,15 @@ void subjammerLoop() {
         subjammerFreqNext();
     }
 
+#if !defined(BOARD_ESP32_WROOM_OLED)
+    // On OLED, BTN_LEFT is the dedicated BACK button (handled by
+    // featureExitButtonPressed() at the top of subjammerLoop). Don't
+    // overload it with "previous frequency" — that makes BACK feel broken
+    // because a quick tap changes frequency instead of exiting.
     if (btnLeftState == LOW && !autoMode && millis() - lastDebounceTime > debounceDelay) {
         subjammerFreqPrev();
     }
+#endif
 
     if (btnDownState == LOW && millis() - lastDebounceTime > debounceDelay) {
         subjammerToggleAuto();
@@ -3665,12 +3792,18 @@ void subBruteLoop() {
   const int btnDownState = isPhysicalButtonPressed(BTN_DOWN) ? LOW : HIGH;
 #endif
 
-  if (btnLeftState == LOW && millis() - s_lastDebounce > kDebounceMs) {
-    adjustFocused(-1);
-  }
   if (btnRightState == LOW && millis() - s_lastDebounce > kDebounceMs) {
     adjustFocused(+1);
   }
+#if !defined(BOARD_ESP32_WROOM_OLED)
+  // On OLED, BTN_LEFT is the dedicated BACK button (handled by
+  // featureExitButtonPressed() at the top of subBruteLoop). Don't overload
+  // it with "adjust focused digit down" — that makes BACK feel broken
+  // because a quick tap changes the digit instead of exiting.
+  if (btnLeftState == LOW && millis() - s_lastDebounce > kDebounceMs) {
+    adjustFocused(-1);
+  }
+#endif
   if (btnDownState == LOW && millis() - s_lastDebounce > kDebounceMs) {
     cycleFocus();
   }

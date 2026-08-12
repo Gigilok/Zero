@@ -3620,7 +3620,6 @@ void handleButtons() {
   if (currentMillis - lastButtonPress < debounceTime) return;
 
   int oldPage = current_page;
-  const int deviceCount = bleResults.getCount();
 
   if (isButtonPressed(BTN_UP)) {
     if (currentIndex > 0) {
@@ -3639,7 +3638,7 @@ void handleButtons() {
   }
 
   if (isButtonPressed(BTN_DOWN)) {
-    if (currentIndex < deviceCount - 1) {
+    if (currentIndex < bleResults.getCount() - 1) {
       currentIndex++;
       delay(200);
       if (!isDetailView) {
@@ -3654,39 +3653,6 @@ void handleButtons() {
     lastButtonPress = currentMillis;
   }
 
-#if defined(BOARD_ESP32_WROOM_OLED)
-  // OLED: BTN_RIGHT cycles pages (or toggles detail view), BTN_SELECT opens
-  // details / triggers rescan, BTN_LEFT exits (handled by featureExitButtonPressed).
-  if (isButtonPressed(BTN_RIGHT)) {
-    delay(200);
-    if (isDetailView) {
-      isDetailView = false;
-    } else if (deviceCount > 0) {
-      const int totalPages = (deviceCount + bleDevicesPerPage() - 1) / bleDevicesPerPage();
-      current_page++;
-      if (current_page >= totalPages) current_page = 0;
-      currentIndex = current_page * bleDevicesPerPage();
-      listStartIndex = current_page * bleDevicesPerPage();
-    }
-    screenNeedsUpdate = true;
-    fullScreenUpdate = true;
-    lastButtonPress = currentMillis;
-  }
-
-  if (isButtonPressed(BTN_SELECT)) {
-    delay(200);
-    if (isDetailView) {
-      isDetailView = false;
-    } else if (deviceCount > 0) {
-      isDetailView = true;
-    } else {
-      startBLEScan();
-    }
-    screenNeedsUpdate = true;
-    fullScreenUpdate = true;
-    lastButtonPress = currentMillis;
-  }
-#else
   if (isButtonPressed(BTN_RIGHT)) {
     delay(200);
     if (!isScanning) {
@@ -3709,7 +3675,6 @@ void handleButtons() {
     screenNeedsUpdate = true;
     lastButtonPress = currentMillis;
   }
-#endif
 }
 
 void updateBLEList() {
@@ -3723,11 +3688,7 @@ void updateBLEList() {
     tft.println("No devices found.");
     tft.setCursor(10, LIST_HEADER_Y + 12);
     tft.println("Press Rescan.");
-#if defined(BOARD_ESP32_WROOM_OLED)
-    esp32divDrawScannerFooter("Sel:Scan", "L:Exit", 0);
-#else
     drawTabBar("Rescan", false, "Prev", true, "Next", true);
-#endif
     return;
   }
 
@@ -3800,20 +3761,13 @@ void updateBLEList() {
     tft.println(page_buf);
 
     const int end_index = min(listStartIndex + bleDevicesPerPage(), deviceCount);
-    int drawnRows = 0;
     for (int i = listStartIndex; i < end_index; i++) {
       drawRow(i, (i == currentIndex));
-      drawnRows++;
     }
 
-#if defined(BOARD_ESP32_WROOM_OLED)
-    esp32divDrawListScrollbar(drawnRows, deviceCount, listStartIndex);
-    esp32divDrawScannerFooter("Sel:Open", "R:Next", 0);
-#else
     const bool prevDisabled = (current_page == 0);
     const bool nextDisabled = ((current_page + 1) * bleDevicesPerPage() >= deviceCount);
     drawTabBar("Rescan", false, "Prev", prevDisabled, "Next", nextDisabled);
-#endif
 
     last_rendered_page = current_page;
     last_rendered_index = currentIndex;

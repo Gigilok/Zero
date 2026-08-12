@@ -403,10 +403,7 @@ void do_sampling_FFT() {
   constexpr int kOledGraphTop    = 20;
   constexpr int kOledGraphH      = 40;  // y=20..59
   constexpr int kOledGraphW      = 128;
-  // Lower threshold so even weak RF activity shows up on the graph. The
-  // user reported "graphs don't appear" — with threshold=24 + attenuation
-  // climbing from 10, low-activity channels produced no visible bars.
-  constexpr int kOledThreshold   = 6;
+  constexpr int kOledThreshold   = 24;  // 1-bit ON threshold (lower = more sensitive)
 
   static uint8_t s_fftBuf[kOledGraphH][kOledGraphW / 8];  // 640 bytes
   static int     s_fftWriteIdx = 0;
@@ -477,21 +474,6 @@ void do_sampling_FFT() {
         oled->drawPixel(x, oledY, SSD1306_WHITE);
       }
     }
-  }
-
-  // ---- Draw info header on top of the OLED (y=8..18) ----
-  // Show channel + packet count + deauth count so the user can see the
-  // scanner is actually running (not a frozen screen). Use the SSD1306
-  // text API directly (Adafruit_GFX size=1, 6x8 px font).
-  {
-    char info[24];
-    snprintf(info, sizeof(info), "Ch:%d Pkt:%lu D:%lu",
-             ch, (unsigned long)tmpPacketCounter, (unsigned long)deauths);
-    oled->fillRect(0, 8, kOledGraphW, 11, SSD1306_BLACK);   // clear header
-    oled->setTextSize(1);
-    oled->setTextColor(SSD1306_WHITE);
-    oled->setCursor(0, 9);
-    oled->print(info);
   }
   // Single I2C transfer for the whole frame.
   oled->display();
@@ -2417,12 +2399,7 @@ void displayWiFiList(bool fullRedraw = false) {
     tft.println("No networks found.");
     tft.setCursor(10, LIST_HEADER_Y + 12);
     tft.println("Press Rescan.");
-#if defined(BOARD_ESP32_WROOM_OLED)
-    // OLED: BTN_SELECT triggers a rescan; BTN_LEFT exits.
-    esp32divDrawScannerFooter("Sel:Scan", "L:Exit", 0);
-#else
     drawTabBar("Rescan", false, "Prev", true, "Next", true);
-#endif
     return;
   }
 
@@ -2451,25 +2428,14 @@ void displayWiFiList(bool fullRedraw = false) {
 
     int y = LIST_FIRST_ROW_Y;
     const int end_index = min(listStartIndex + wifiNetworksPerPage(), networkCount);
-    int drawnRows = 0;
     for (int i = listStartIndex; i < end_index && y < wifiListBottomY(); i++) {
       drawNetworkRow(i, y, (i == currentIndex));
       y += LIST_ROW_H;
-      drawnRows++;
     }
 
-#if defined(BOARD_ESP32_WROOM_OLED)
-    // OLED-aware scrollbar on the right edge whenever the list overflows.
-    // visibleCount = drawnRows, totalCount = networkCount.
-    esp32divDrawListScrollbar(drawnRows, networkCount, listStartIndex);
-    // OLED-aware 2-button footer: "Sel:Open" / "R:Next".
-    // BTN_LEFT exits (handled by featureExitButtonPressed in wifiscanLoop).
-    esp32divDrawScannerFooter("Sel:Open", "R:Next", 0);
-#else
     const bool prevDisabled = (current_page == 0);
     const bool nextDisabled = ((current_page + 1) * wifiNetworksPerPage() >= networkCount);
     drawTabBar("Rescan", false, "Prev", prevDisabled, "Next", nextDisabled);
-#endif
     last_rendered_page = current_page;
     last_rendered_index = currentIndex;
     return;
@@ -2630,7 +2596,6 @@ void handleButton() {
 
   bool updated = false;
   int oldPage = current_page;
-  const int networkCount = WiFi.scanComplete();
 
   if (isButtonPressed(BTN_UP)) {
     if (!isDetailView && currentIndex > 0) {
@@ -2643,7 +2608,7 @@ void handleButton() {
   }
 
   if (isButtonPressed(BTN_DOWN)) {
-    if (!isDetailView && currentIndex < networkCount - 1) {
+    if (!isDetailView && currentIndex < WiFi.scanComplete() - 1) {
       currentIndex++;
       delay(200);
       current_page = currentIndex / max(1, wifiNetworksPerPage());
@@ -2652,39 +2617,6 @@ void handleButton() {
     lastButtonPress = currentMillis;
   }
 
-#if defined(BOARD_ESP32_WROOM_OLED)
-  // On the OLED board there is no touch. BTN_RIGHT advances pages (or opens
-  // details when in detail view), BTN_SELECT opens details / triggers rescan,
-  // BTN_LEFT exits (handled by featureExitButtonPressed() in wifiscanLoop).
-  if (isButtonPressed(BTN_RIGHT)) {
-    delay(200);
-    if (isDetailView) {
-      isDetailView = false;
-      updated = true;
-    } else if (networkCount > 0) {
-      const int totalPages = (networkCount + wifiNetworksPerPage() - 1) / wifiNetworksPerPage();
-      current_page++;
-      if (current_page >= totalPages) current_page = 0;  // wrap to first page
-      currentIndex = current_page * wifiNetworksPerPage();
-      updated = true;
-    }
-    lastButtonPress = currentMillis;
-  }
-
-  if (isButtonPressed(BTN_SELECT)) {
-    delay(200);
-    if (isDetailView) {
-      isDetailView = false;
-    } else if (networkCount > 0) {
-      isDetailView = true;
-    } else {
-      // Empty list — SELECT triggers a rescan.
-      startWiFiScan();
-    }
-    updated = true;
-    lastButtonPress = currentMillis;
-  }
-#else
   if (isButtonPressed(BTN_RIGHT)) {
     delay(200);
     if (!isScanning) {
@@ -2704,7 +2636,6 @@ void handleButton() {
     updated = true;
     lastButtonPress = currentMillis;
   }
-#endif
 
   if (updated) {
     if (isDetailView) displayWiFiDetails();
@@ -2884,7 +2815,7 @@ void wifiscanSetup() {
 
 void wifiscanLoop() {
 
-  if (feature_active && featureExitButtonPressed()) {
+  if (feature_active && (featureExitButtonPressed())) {
     feature_exit_requested = true;
     return;
   }
@@ -5018,26 +4949,10 @@ void deautherSetup() {
 
 void deautherLoop() {
 
-#if !defined(BOARD_ESP32_WROOM_OLED)
-    // On non-OLED boards, BTN_LEFT is the legacy "toggle attack" button.
-    // On OLED boards, BTN_LEFT is the dedicated BACK button and is handled
-    // by deautherHandleNavButtons() below using BTN_RIGHT for back instead.
     if (feature_active && (featureExitButtonPressed())) {
         feature_exit_requested = true;
         return;
     }
-#else
-    // On OLED, only exit if BTN_LEFT is pressed AND we're not in the
-    // attack-running screen (where BTN_LEFT toggles the attack on/off).
-    // When the attack screen is shown (selected_ap_index >= 0), BTN_LEFT
-    // is consumed by deautherHandleNavButtons() to toggle the attack —
-    // exit only happens via BTN_RIGHT (which deautherOpenTarget uses to
-    // pop back to the scan list, then BTN_LEFT from the scan list exits).
-    if (feature_active && featureExitButtonPressed() && selected_ap_index == -1 && !attack_running) {
-        feature_exit_requested = true;
-        return;
-    }
-#endif
 
     tft.drawFastHLine(0, 19, 240, UI_LINE);
 
@@ -5730,21 +5645,10 @@ void probeRequestFloodSetup() {
 
 void probeRequestFloodLoop() {
 
-#if !defined(BOARD_ESP32_WROOM_OLED)
     if (feature_active && (featureExitButtonPressed())) {
         feature_exit_requested = true;
         return;
     }
-#else
-    // On OLED, BTN_LEFT is the dedicated BACK button. While a target is
-    // selected (selected_ap_index >= 0), BTN_LEFT toggles the attack
-    // (handled by probeHandleNavButtons). Exit only happens when the user
-    // is on the scan list (selected_ap_index == -1) and presses BTN_LEFT.
-    if (feature_active && featureExitButtonPressed() && selected_ap_index == -1 && !attack_running) {
-        feature_exit_requested = true;
-        return;
-    }
-#endif
 
     tft.drawFastHLine(0, 19, 240, UI_LINE);
 
@@ -6624,21 +6528,11 @@ static void handleNavButtons() {
   const bool onReveal = (s_selectedIndex >= 0 || s_listenAll);
 
   if (onReveal) {
-#if !defined(BOARD_ESP32_WROOM_OLED)
     if (isButtonPressedEdge(BTN_LEFT)) {
       toggleForce();
       s_lastBtnMs = now;
       return;
     }
-#else
-    // On OLED, BTN_LEFT is BACK (handled by featureExitButtonPressed at top
-    // of hiddenSsidLoop). Use BTN_SELECT to toggle force mode instead.
-    if (isButtonPressedEdge(BTN_SELECT)) {
-      toggleForce();
-      s_lastBtnMs = now;
-      return;
-    }
-#endif
     if (isButtonPressedEdge(BTN_UP) && !s_listening) {
       startListening(false);
       updateRevealStats();
@@ -6663,22 +6557,12 @@ static void handleNavButtons() {
     return;
   }
 
-#if !defined(BOARD_ESP32_WROOM_OLED)
   if (isButtonPressedEdge(BTN_LEFT)) {
     scanHiddenNetworks();
     drawScanScreen(true);
     s_lastBtnMs = now;
     return;
   }
-#else
-  // On OLED, BTN_SELECT triggers a rescan (BTN_LEFT is BACK).
-  if (isButtonPressedEdge(BTN_SELECT)) {
-    scanHiddenNetworks();
-    drawScanScreen(true);
-    s_lastBtnMs = now;
-    return;
-  }
-#endif
   if (isButtonPressedEdge(BTN_UP) && s_currentIndex > 0) {
     s_currentIndex--;
     drawScanScreen(false);
@@ -7263,25 +7147,10 @@ static void handleNavButtons() {
   }
 
   if (isButtonPressedEdge(BTN_LEFT)) {
-#if !defined(BOARD_ESP32_WROOM_OLED)
-    runScan();
-    s_lastBtnMs = now;
-    return;
-#else
-    // On OLED, BTN_LEFT is BACK (exit). Skip the rescan trigger.
-    s_lastBtnMs = now;
-    return;
-#endif
-  }
-
-#if defined(BOARD_ESP32_WROOM_OLED)
-  // On OLED, BTN_SELECT triggers a rescan.
-  if (isButtonPressedEdge(BTN_SELECT)) {
     runScan();
     s_lastBtnMs = now;
     return;
   }
-#endif
 
   const int perPage = networksPerPage();
   if (isButtonPressedEdge(BTN_DOWN)) {
@@ -8163,27 +8032,6 @@ static void handleNavButtons() {
   const int count = (s_phase == Phase::ApList) ? s_apCount : s_hostCount;
 
   if (isButtonPressedEdge(BTN_LEFT)) {
-#if defined(BOARD_ESP32_WROOM_OLED)
-    // On OLED, BTN_LEFT is the dedicated BACK button (handled by
-    // featureExitButtonPressed() at top of arpScannerLoop). Skip the rescan
-    // trigger here so the user can exit cleanly.
-    s_lastBtnMs = now;
-    return;
-#else
-    if (s_phase == Phase::ApList) {
-      scanAccessPoints();
-    } else {
-      runArpSweep();
-    }
-    s_lastBtnMs = now;
-    return;
-#endif
-  }
-
-#if defined(BOARD_ESP32_WROOM_OLED)
-  // On OLED, BTN_SELECT takes over the rescan/sweep action that BTN_LEFT
-  // used to perform on TFT boards.
-  if (isButtonPressedEdge(BTN_SELECT)) {
     if (s_phase == Phase::ApList) {
       scanAccessPoints();
     } else {
@@ -8192,7 +8040,6 @@ static void handleNavButtons() {
     s_lastBtnMs = now;
     return;
   }
-#endif
 
   if (isButtonPressedEdge(BTN_RIGHT)) {
     if (s_phase == Phase::ApList) {

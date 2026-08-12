@@ -4324,7 +4324,13 @@ static void handleInput() {
   const bool navReset = featureHasTouchNavBar() && isTouchNavButtonPressedEdge(BTN_UP);
   const bool navLog = featureHasTouchNavBar() && isTouchNavButtonPressedEdge(BTN_DOWN);
 
+#if !defined(BOARD_ESP32_WROOM_OLED)
+  // On OLED, BTN_LEFT is the dedicated BACK button (handled by
+  // featureExitButtonPressed() at the top of jammingdetector::Loop). Don't
+  // overload it with "tune frequency down" — that makes BACK feel broken
+  // because a quick tap changes the frequency instead of exiting.
   if (edge(BTN_LEFT, prevLeft) || navFreqDown) tuneTo(freqIdx + kFreqCount - 1);
+#endif
   if (edge(BTN_RIGHT, prevRight) || navFreqUp) tuneTo(freqIdx + 1);
   if (edge(BTN_UP, prevUp) || navReset) {
     jdResetStats();

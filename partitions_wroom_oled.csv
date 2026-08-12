@@ -1,14 +1,22 @@
 # ESP32 WROOM-OLED partition table
 # ----------------------------------------------------------------------------
-# 4 MB flash:
-#   * nvs       24 KB    (Wi-Fi / BLE config — required by Arduino-ESP32)
-#   * otadata   8 KB     (OTA slot selection — required even if no OTA used)
-#   * app0      2.96 MB  (application; large enough for the full ESP32-DIV build)
-#   * spiffs    1 MB     (LittleFS — backs the SDFlashAdapter shim so all
-#                          "save to SD" features work without a real SD card)
+# 4 MB flash layout (all offsets 0x10000-aligned for app partitions — required
+# by the ESP32 bootloader; data partitions only need 0x1000 alignment).
+#
+#   * nvs       20 KB    (Wi-Fi / BLE config — Arduino-ESP32 standard size)
+#   * otadata    8 KB    (OTA slot selection — required even if no OTA used)
+#   * app0     2.94 MB   (application; large enough for the full ESP32-DIV build)
+#   * spiffs     1 MB    (LittleFS — backs the SDFlashAdapter shim so all
+#                         "save to SD" features work without a real SD card)
+#
+# Offset math:
+#   nvs      0x09000 + 0x5000  = 0x0E000
+#   otadata  0x0E000 + 0x2000  = 0x10000   <- app0 must start here (64KB-aligned)
+#   app0     0x10000 + 0x2F0000 = 0x300000
+#   spiffs   0x300000 + 0x100000 = 0x400000 <- exactly 4 MB, no overflow
 # ============================================================================
 # Name,   Type, SubType,  Offset,   Size,    Flags
-nvs,      data, nvs,      0x9000,   0x6000,
-otadata,  data, ota,      0xf000,   0x2000,
-app0,     app,  ota_0,    0x11000,  0x300000,
-spiffs,   data, spiffs,   0x311000, 0x100000,
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x2F0000,
+spiffs,   data, spiffs,   0x300000, 0x100000,

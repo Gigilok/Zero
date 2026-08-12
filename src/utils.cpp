@@ -955,9 +955,17 @@ bool sdMountChipSelect(uint8_t cs) {
 // GPIO 4 buzzer driven via LEDC channel 7 (same channel as subghz.cpp's
 // replayBeep uses, so they don't conflict). These helpers provide:
 //   buzzerInit()     — call once in setup() to configure the GPIO
-//   buzzerBeep(hz,ms) — start a tone; auto-silenced by buzzerPoll()
-//   buzzerPoll()     — call in loop() to silence after the ms duration
-//   buzzerClick()    — short UI feedback beep for button presses
+//   buzzerBeep(hz,ms) — BLOCKING short beep of exactly `ms` milliseconds.
+//                       We block (delay) for the tone duration so the beep
+//                       ALWAYS ends at the right time, even if the calling
+//                       feature code never yields back to loop()/buzzerPoll().
+//                       This fixes the "buzzer stays on too long" symptom
+//                       where button feedback inside scanners (WiFi scan,
+//                       subghz replay, etc.) kept buzzing for seconds.
+//   buzzerPoll()     — kept for compatibility; now a no-op since buzzerBeep()
+//                       silences itself before returning.
+//   buzzerClick()    — short UI feedback beep (2400 Hz, 12 ms) for button
+//                       presses — exactly one short beep per key press.
 //
 // On Arduino-ESP32 v2.0.17 (espressif32@6.5.0) we use the legacy LEDC API:
 //   ledcSetup(ch, freq, res)        — configure channel
@@ -968,8 +976,6 @@ bool sdMountChipSelect(uint8_t cs) {
 static constexpr uint8_t  BUZZER_LEDC_CH  = 7;
 static constexpr uint16_t BUZZER_LEDC_FREQ= 4000;
 static constexpr uint8_t  BUZZER_LEDC_RES = 8;
-static bool    s_buzzerArmed   = false;
-static uint32_t s_buzzerOffAtMs = 0;
 
 void buzzerInit() {
   // Configure the GPIO as output low (silent). The LEDC channel is set up
@@ -980,26 +986,43 @@ void buzzerInit() {
   Serial.println(F("[buzzer] GPIO 4 configured"));
 }
 
-void buzzerBeep(uint16_t hz, uint16_t ms) {
-  ledcSetup(BUZZER_LEDC_CH, BUZZER_LEDC_FREQ, BUZZER_LEDC_RES);
-  ledcAttachPin(BUZZER_PIN, BUZZER_LEDC_CH);
-  ledcWriteTone(BUZZER_LEDC_CH, hz);
-  s_buzzerArmed = true;
-  s_buzzerOffAtMs = millis() + ms;
-}
-
-void buzzerPoll() {
-  if (!s_buzzerArmed) return;
-  if ((int32_t)(millis() - s_buzzerOffAtMs) < 0) return;
+// Internal helper: silence the buzzer and release the GPIO.
+static void buzzerSilence() {
   ledcWriteTone(BUZZER_LEDC_CH, 0);
   ledcDetachPin(BUZZER_PIN);
   ::pinMode(BUZZER_PIN, OUTPUT);
   ::digitalWrite(BUZZER_PIN, LOW);
-  s_buzzerArmed = false;
+}
+
+void buzzerBeep(uint16_t hz, uint16_t ms) {
+  // Clamp duration to a sane range so a stray call can't lock up the UI
+  // or play an endlessly long beep. 200 ms is the absolute maximum.
+  if (ms > 200) ms = 200;
+  if (ms == 0) {
+    buzzerSilence();
+    return;
+  }
+  ledcSetup(BUZZER_LEDC_CH, BUZZER_LEDC_FREQ, BUZZER_LEDC_RES);
+  ledcAttachPin(BUZZER_PIN, BUZZER_LEDC_CH);
+  ledcWriteTone(BUZZER_LEDC_CH, hz);
+  // BLOCK for the exact tone duration. The tone is now playing on the LEDC
+  // hardware; delay() yields to the WiFi/FreeRTOS tasks so the system
+  // keeps running, but the call itself doesn't return until the tone is
+  // finished. This guarantees a single short beep per call, regardless of
+  // whether the caller ever polls buzzerPoll() afterwards.
+  delay(ms);
+  buzzerSilence();
+}
+
+void buzzerPoll() {
+  // No-op now: buzzerBeep() blocks for the tone duration and silences the
+  // buzzer before returning. Kept for source compatibility with code that
+  // calls buzzerPoll() from its main loop.
 }
 
 void buzzerClick() {
-  buzzerBeep(2400, 15);
+  // Short UI feedback: 2400 Hz, 12 ms — one crisp beep per key press.
+  buzzerBeep(2400, 12);
 }
 #else
 // Non-OLED boards or no buzzer pin — no-op stubs.

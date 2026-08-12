@@ -229,7 +229,20 @@ public:
     // 4-arg overload (TFT_eSPI convention) — uses current text color/size and
     // returns the character's width so the caller can advance the cursor.
     // Used by utils.cpp's terminal: `xPos += tft.drawChar(data, xPos, yDraw, 2);`
-    int16_t drawChar(unsigned char c, int16_t x, int16_t y, uint8_t size);
+    //
+    // Defined INLINE here (rather than out-of-line in DisplayAdapter.cpp) so the
+    // symbol is emitted into every translation unit that calls it — avoids a
+    // finicky linker error where the out-of-line definition in DisplayAdapter.cpp
+    // was reported as an undefined reference from utils.cpp.o.
+    inline int16_t drawChar(unsigned char c, int16_t x, int16_t y, uint8_t size) {
+        if (!_oled) return 0;
+        _oled->drawChar(sx(x), sy(y), c,
+                        colorToInk(_fgColor), colorToBg(_bgColor),
+                        scaledTextSize());
+        flush();
+        // Adafruit_GFX default font is 5x7 at size 1; advance width is 6px per char.
+        return 6 * (size > 0 ? size : 1);
+    }
     void drawString(const char *str, int16_t x, int16_t y);
     void drawString(const String &str, int16_t x, int16_t y) { drawString(str.c_str(), x, y); }
     // 4-arg overloads with a trailing `font` parameter (TFT_eSPI convention).
@@ -265,7 +278,58 @@ public:
     // Used by Terminal::scroll_line() (utils.cpp) and any feature that needs
     // terminal-style line scrolling. pixelRows should typically equal the
     // font's line height (e.g. 8 for size=1, 16 for size=2).
-    void scrollUp(uint8_t pixelRows);
+    //
+    // Defined INLINE here (rather than out-of-line in DisplayAdapter.cpp) so the
+    // symbol is emitted into every translation unit that calls it — avoids a
+    // finicky linker error where the out-of-line definition in DisplayAdapter.cpp
+    // was reported as an undefined reference from utils.cpp.o.
+    inline void scrollUp(uint8_t pixelRows) {
+        if (!_oled || pixelRows == 0) return;
+        if (pixelRows >= OLED_SCREEN_HEIGHT) {
+            _oled->fillScreen(SSD1306_BLACK);
+            flush();
+            return;
+        }
+
+        uint8_t *buf = _oled->getBuffer();
+        if (!buf) return;
+        const int PAGES = OLED_SCREEN_HEIGHT / 8;   // 8 pages
+        const int COLS  = OLED_SCREEN_WIDTH;        // 128 cols
+        const int pageShift = pixelRows / 8;
+        const int bitShift  = pixelRows & 7;
+
+        if (bitShift == 0) {
+            // Whole-page shift: simple memmove.
+            const int movePages = PAGES - pageShift;
+            if (movePages > 0) {
+                memmove(buf, buf + pageShift * COLS, (size_t)movePages * COLS);
+            }
+            // Zero the freed pages at the bottom.
+            memset(buf + movePages * COLS, 0, (size_t)pageShift * COLS);
+        } else {
+            // Sub-page shift: combine bits from current and next page.
+            for (int p = 0; p < PAGES - pageShift; ++p) {
+                const int srcIdxLo = (p + pageShift)     * COLS;
+                const int srcIdxHi = (p + pageShift + 1) * COLS;
+                for (int c = 0; c < COLS; ++c) {
+                    uint8_t lo = buf[srcIdxLo + c] >> bitShift;
+                    uint8_t hi = 0;
+                    if (p + pageShift + 1 < PAGES) {
+                        hi = buf[srcIdxHi + c] << (8 - bitShift);
+                    }
+                    buf[p * COLS + c] = lo | hi;
+                }
+            }
+            // Zero the freed bottom pages.
+            const int freedPages = pageShift + 1;
+            const int startClear = PAGES - freedPages;
+            if (startClear < PAGES) {
+                memset(buf + startClear * COLS, 0,
+                       (size_t)(PAGES - startClear) * COLS);
+            }
+        }
+        flush();
+    }
 
     // ---- Touch stubs (the OLED board has no touch) ----
     uint8_t  getTouchRaw(uint16_t *x = nullptr, uint16_t *y = nullptr) { if (x) *x = 0; if (y) *y = 0; return false; }
